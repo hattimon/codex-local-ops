@@ -1,0 +1,6 @@
+version: 1
+projects:
+  trusted_roots: []
+permissions:
+  local_profile: SAFE
+  expert_mode: false

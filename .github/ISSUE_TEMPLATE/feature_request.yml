@@ -1,0 +1,37 @@
+name: Feature request
+description: Propose a focused improvement to Codex Local Ops
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform scope
+      options:
+        - Cross-platform
+        - Windows
+        - Linux
+        - macOS
+        - Documentation / packaging / CI
+    validations:
+      required: true
+  - type: textarea
+    id: need
+    attributes:
+      label: Use case
+      description: What workflow or limitation should this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful behavior change.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security or permission impact
+      description: Note any impact on trusted roots, execution, desktop control, credentials, SSH, Docker, or remote access.

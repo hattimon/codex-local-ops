@@ -1,0 +1,105 @@
+{
+  "bootstrap_complete": true,
+  "mcp_installed": true,
+  "mcp_name": "codexLocalOps",
+  "transport": "stdio",
+  "tool_count": 146,
+  "last_validated": "2026-09-23",
+  "python": {
+    "independent_official_cpython": true,
+    "version": "3.12.10",
+    "venv_path": "%USERPROFILE%\\.codex-local-ops.venv"
+  },
+  "windows_tested": true,
+  "trusted_roots_tested": true,
+  "ssh_agent_tested": true,
+  "ssh_agent_identities_count": 3,
+  "ssh_aliases_imported_count": 1,
+  "ssh_read_only_test": "skipped_ambiguous_host",
+  "wsl_tested": true,
+  "wsl_ubuntu_read_only_test": true,
+  "docker_tested": true,
+  "mcp_stdio_smoke_tested": true,
+  "async_jobs_tested": true,
+  "async_jobs_mcp_smoke": "passed",
+  "async_jobs": {
+    "job_start": true,
+    "run_script_async": true,
+    "job_status": true,
+    "job_output": true,
+    "job_cancel": true,
+    "job_list": true,
+    "cancel_state_verified": "CANCELLED",
+    "cleanup_verified": true,
+    "finished_exit_unknown_supported": true
+  },
+  "features": {
+    "first_run_gui": "implemented",
+    "browser_automation": "implemented",
+    "desktop_automation": "implemented",
+    "screenshots": "implemented",
+    "screen_recording": "implemented",
+    "ffmpeg_media": "implemented",
+    "async_media": "implemented",
+    "obs": "implemented",
+    "animations": "implemented",
+    "async_animation_render": "implemented",
+    "linux_x11_desktop": "implemented",
+    "linux_wayland_global_control": "capability_limited",
+    "macos_desktop": "implemented_requires_accessibility"
+  },
+  "native_validation": {
+    "browser_windows": "passed",
+    "ffmpeg_async_windows": "passed",
+    "screen_recording_windows": "diagnostics_passed_capture_blocked_by_harness",
+    "desktop_windows": "passed_interactive",
+    "gui_windows": "passed_interactive",
+    "screenshot_windows": "passed_interactive_pywinauto_uia",
+    "obs_windows": "skipped_server_not_running",
+    "native2_platform_info": "passed_direct_native2"
+  },
+  "manual_interactive_windows": {
+    "status": "passed",
+    "generated_at": "2026-09-23T14:56:00+0200",
+    "report": "artifacts/interactive-validation/result.json",
+    "python": "3.12.10",
+    "pywinauto": "0.6.9",
+    "pywin32": "312",
+    "pillow": "12.3.0",
+    "mss": "10.2.0",
+    "desktop_backend": "win32",
+    "ui_automation": true,
+    "computer_control_mode": "SAFE",
+    "window_count": 17,
+    "visible_window_count": 15,
+    "first_run_completed": true,
+    "gui_manager": {
+      "status": "PASS",
+      "title": "Codex Local Ops Manager",
+      "class_name": "TkTopLevel",
+      "detection_backend": "win32-enum-exact"
+    },
+    "screenshot": {
+      "status": "PASS",
+      "capture_backend": "pywinauto-uia",
+      "width": 996,
+      "height": 719,
+      "format": "PNG",
+      "nonblank": true
+    }
+  },
+  "tests": {
+    "passed": 40,
+    "failed": 0
+  },
+  "web_harness_tested": true,
+  "remaining_phases": [
+    "interactive Windows screen recording validation",
+    "OBS connection validation when OBS/WebSocket is intentionally running",
+    "native Linux and macOS validation",
+    "expanded documentation examples",
+    "execute expanded CI and release packaging validation"
+  ]
+}
+
+

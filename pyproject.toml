@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codex-local-ops"
+version = "0.1.0b1"
+description = "Cross-platform local operations MCP server for Codex"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["codex", "mcp", "automation", "windows", "developer-tools"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+  "mcp>=1.13,<2",
+  "platformdirs>=4.3",
+  "psutil>=6.1",
+  "PyYAML>=6.0",
+  "tomlkit>=0.13",
+  "keyring>=25.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/hattimon/codex-local-ops"
+Repository = "https://github.com/hattimon/codex-local-ops"
+Issues = "https://github.com/hattimon/codex-local-ops/issues"
+
+[project.optional-dependencies]
+desktop = ["mss>=10.0", "Pillow>=11.1"]
+browser = ["playwright>=1.55"]
+obs = ["obsws-python>=1.8"]
+windows = ["pywinauto>=0.6.9; sys_platform == 'win32'"]
+dev = [
+  "build>=1.2",
+  "pytest>=8.3",
+  "pytest-timeout>=2.3",
+  "ruff>=0.12",
+  "twine>=5.1",
+]
+
+[project.scripts]
+clops = "codex_local_ops.cli:main"
+codex-local-ops = "codex_local_ops.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codex_local_ops"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+timeout = 30
+markers = [
+  "interactive: requires a real interactive desktop/session and is excluded from headless CI",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"

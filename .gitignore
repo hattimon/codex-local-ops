@@ -1,0 +1,49 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Python environments and tooling
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Build and generated output
+dist/
+build/
+artifacts/
+screenshots/
+recordings/
+media-output/
+*.log
+logs/
+
+# Local runtime/test state
+.tmp-*/
+.codex-local-ops/
+.codex-local-ops.venv/
+/config.yaml
+.env
+.env.*
+!.env.example
+
+# Credentials and private local material
+credentials*.json
+secrets*.json
+*.pem
+*.key
+id_rsa
+id_ed25519
+browser-profile*/
+.browser-profile/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
