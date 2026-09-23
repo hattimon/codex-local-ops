@@ -1013,6 +1013,94 @@ def git_diff(path: str, staged: bool = False) -> dict:
     return _result("git_diff", {"path": path}, lambda: git_ops.git(path, args))
 
 
+@mcp.tool(name="git_log")
+def git_log(path: str, limit: int = 20) -> dict:
+    return _result("git_log", {"path": path, "limit": limit}, lambda: git_ops.log(path, limit))
+
+
+@mcp.tool(name="git_branch_list")
+def git_branch_list(path: str) -> dict:
+    return _result("git_branch_list", {"path": path}, lambda: git_ops.branches(path))
+
+
+@mcp.tool(name="git_remote_list")
+def git_remote_list(path: str) -> dict:
+    return _result("git_remote_list", {"path": path}, lambda: git_ops.remotes(path))
+
+
+@mcp.tool(name="github_auth_status")
+def github_auth_status() -> dict:
+    return _result("github_auth_status", {}, git_ops.github_auth_status)
+
+
+@mcp.tool(name="github_repo_view")
+def github_repo_view(path: str) -> dict:
+    return _result("github_repo_view", {"path": path}, lambda: git_ops.github_repo_view(path))
+
+
+@mcp.tool(name="github_workflow_list")
+def github_workflow_list(path: str, limit: int = 50) -> dict:
+    return _result(
+        "github_workflow_list",
+        {"path": path, "limit": limit},
+        lambda: git_ops.github_workflow_list(path, limit),
+    )
+
+
+@mcp.tool(name="github_workflow_runs")
+def github_workflow_runs(path: str, limit: int = 20) -> dict:
+    return _result(
+        "github_workflow_runs",
+        {"path": path, "limit": limit},
+        lambda: git_ops.github_run_list(path, limit),
+    )
+
+
+@mcp.tool(name="github_workflow_run_view")
+def github_workflow_run_view(path: str, run_id: int) -> dict:
+    return _result(
+        "github_workflow_run_view",
+        {"path": path, "run_id": run_id},
+        lambda: git_ops.github_run_view(path, run_id),
+    )
+
+
+@mcp.tool(name="github_release_list")
+def github_release_list(path: str, limit: int = 30) -> dict:
+    return _result(
+        "github_release_list",
+        {"path": path, "limit": limit},
+        lambda: git_ops.github_release_list(path, limit),
+    )
+
+
+@mcp.tool(name="github_release_view")
+def github_release_view(path: str, tag: str) -> dict:
+    return _result(
+        "github_release_view",
+        {"path": path, "tag": tag},
+        lambda: git_ops.github_release_view(path, tag),
+    )
+
+
+@mcp.tool(name="github_pr_list")
+def github_pr_list(path: str, limit: int = 30, state: str = "open") -> dict:
+    return _result(
+        "github_pr_list",
+        {"path": path, "limit": limit, "state": state},
+        lambda: git_ops.github_pr_list(path, limit, state),
+    )
+
+
+@mcp.tool(name="github_pr_view")
+def github_pr_view(path: str, number: int) -> dict:
+    return _result(
+        "github_pr_view",
+        {"path": path, "number": number},
+        lambda: git_ops.github_pr_view(path, number),
+    )
+
+
 @mcp.tool(name="health_check")
 def health_check() -> dict:
     return _result("health_check", {}, lambda: {"status": "OK", **run_diagnostics()})

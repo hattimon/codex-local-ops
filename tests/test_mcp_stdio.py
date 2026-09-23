@@ -19,6 +19,31 @@ def test_stdio_handshake_and_bootstrap_call():
                 inventory = await session.list_tools()
                 names = {tool.name for tool in inventory.tools}
                 assert "platform_info" in names
+                assert {
+                    "git_status",
+                    "git_diff",
+                    "git_log",
+                    "git_branch_list",
+                    "git_remote_list",
+                    "github_auth_status",
+                    "github_repo_view",
+                    "github_workflow_list",
+                    "github_workflow_runs",
+                    "github_workflow_run_view",
+                    "github_release_list",
+                    "github_release_view",
+                    "github_pr_list",
+                    "github_pr_view",
+                } <= names
+                assert {
+                    "git_add",
+                    "git_commit",
+                    "git_push",
+                    "git_publish",
+                    "git_tag_create",
+                    "git_remote_modify",
+                    "github_release_create",
+                }.isdisjoint(names)
                 result = await session.call_tool("platform_info", {})
                 assert result.isError is False
     asyncio.run(exercise())

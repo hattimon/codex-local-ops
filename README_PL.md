@@ -96,6 +96,36 @@ Profile hostów SSH używają poziomów `READ_ONLY`, `OPERATIONS` lub `FULL`.
 Profil operacyjny dopuszcza ograniczony zestaw czynności administracyjnych, a
 najszerszy zakres SSH zależy dodatkowo od polityki expert mode.
 
+### Granica Git i GitHub
+
+Integracja Git/GitHub celowo ma dwa poziomy. MCP udostępnia wyłącznie inspekcję:
+`git_status`, `git_diff`, `git_log`, `git_branch_list`, `git_remote_list`,
+`github_auth_status`, `github_repo_view`, `github_workflow_list`,
+`github_workflow_runs`, `github_workflow_run_view`, `github_release_list`,
+`github_release_view`, `github_pr_list` i `github_pr_view`.
+
+Zmiany repozytorium i GitHub są operacjami lokalnego CLI uruchamianymi przez
+użytkownika. Przykłady:
+
+```text
+clops git status --path <repo>
+clops git commit --path <repo> -m "message" --add <pathspec>
+clops git push --path <repo> --remote origin [--branch <branch>] [--async]
+clops git publish --path <repo> --remote origin [--branch <branch>]
+clops github auth-status
+clops github workflow-status --path <repo>
+clops github release-create --path <repo> --tag <existing-tag>
+```
+
+Lokalne komendy write są ograniczone do trusted repositories, wymagają profilu
+lokalnych uprawnień do zapisu (`DEVELOPER`/`FULL` lub istniejącego override
+expert mode) i są audytowane z redakcją sekretów. Wąskie API push nie akceptuje
+force push ani wymuszających refspeców. Procesy potomne GitHub usuwają ze swojego
+środowiska `GH_TOKEN` i `GITHUB_TOKEN`, dzięki czemu mogą korzystać z hostowego
+`gh auth` bez zmiany globalnego środowiska użytkownika i bez ujawniania tokenów
+w normalnym outputcie. Ten podział jest celową granicą bezpieczeństwa, a nie
+brakiem funkcji.
+
 Output komend jest ograniczony, a typowe wzorce sekretów są redagowane przed
 normalnym zwróceniem wyniku przez narzędzia. Dane uwierzytelniające OBS są
 przechowywane w skonfigurowanym secret store i nie są zwracane w statusach.

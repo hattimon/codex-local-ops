@@ -30,7 +30,7 @@ def main() -> int:
         return 1
 
     from codex_local_ops.safety import sanitize
-    from codex_local_ops import ssh_ops
+    from codex_local_ops import git_ops, ssh_ops
     from codex_local_ops.server import mcp
 
     report["import"] = True
@@ -42,13 +42,44 @@ def main() -> int:
         "browser_status", "browser_download_click", "browser_screenshot",
         "desktop_info", "desktop_screenshot", "video_info", "video_contact_sheet",
         "screen_recording_status", "obs_status", "obs_streaming_start",
+        "git_status", "git_diff", "git_log", "git_branch_list", "git_remote_list",
+        "github_auth_status", "github_repo_view", "github_workflow_list",
+        "github_workflow_runs", "github_workflow_run_view", "github_release_list",
+        "github_release_view", "github_pr_list", "github_pr_view",
         "animation_backends", "animation_render", "health_check",
     }
     missing = sorted(required - names)
     report["missing_tools"] = missing
+    forbidden_git_github = {
+        "git_add", "git_commit", "git_push", "git_publish", "git_tag_create",
+        "git_remote_modify", "github_release_create",
+    }
+    exposed_mutating = sorted(forbidden_git_github & names)
+    report["mutating_git_github_mcp_tools"] = exposed_mutating
 
     sanitized = sanitize({"password": "secret-value", "safe": "visible"})
     report["secret_redaction"] = sanitized.get("password") == "[REDACTED]" and sanitized.get("safe") == "visible"
+    old_gh_token = os.environ.get("GH_TOKEN")
+    old_github_token = os.environ.get("GITHUB_TOKEN")
+    try:
+        os.environ["GH_TOKEN"] = "validator-gh-token"
+        os.environ["GITHUB_TOKEN"] = "validator-github-token"
+        child_env = git_ops._github_env()
+        report["github_credential_isolation"] = (
+            "GH_TOKEN" not in child_env
+            and "GITHUB_TOKEN" not in child_env
+            and os.environ.get("GH_TOKEN") == "validator-gh-token"
+            and os.environ.get("GITHUB_TOKEN") == "validator-github-token"
+        )
+    finally:
+        if old_gh_token is None:
+            os.environ.pop("GH_TOKEN", None)
+        else:
+            os.environ["GH_TOKEN"] = old_gh_token
+        if old_github_token is None:
+            os.environ.pop("GITHUB_TOKEN", None)
+        else:
+            os.environ["GITHUB_TOKEN"] = old_github_token
     report["ssh_read_only_guard"] = not ssh_ops._command_allowed("service nginx restart", "READ_ONLY")
     report["ssh_operations_guard"] = (
         ssh_ops._command_allowed("service nginx restart", "OPERATIONS")
@@ -82,7 +113,9 @@ def main() -> int:
         report["compile"]
         and report["import"]
         and not missing
+        and not exposed_mutating
         and report["secret_redaction"]
+        and report["github_credential_isolation"]
         and report["ssh_read_only_guard"]
         and report["ssh_operations_guard"]
         and pytest_ok

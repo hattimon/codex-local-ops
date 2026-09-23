@@ -124,6 +124,7 @@ def start(
     cwd: Path | None = None,
     label: str | None = None,
     cleanup_paths: Iterable[Path | str] | None = None,
+    env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     args = [str(x) for x in argv]
     if not args:
@@ -154,6 +155,7 @@ def start(
         proc = subprocess.Popen(
             args,
             cwd=str(cwd) if cwd else None,
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=stdout,
             stderr=stderr,

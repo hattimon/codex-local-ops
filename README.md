@@ -95,6 +95,36 @@ SSH host profiles use `READ_ONLY`, `OPERATIONS`, or `FULL`. The operations
 profile is limited to bounded operational commands; the broadest SSH behavior
 also depends on expert-mode policy.
 
+### Git and GitHub boundary
+
+Git/GitHub integration intentionally has two levels. MCP exposes inspection
+only: `git_status`, `git_diff`, `git_log`, `git_branch_list`,
+`git_remote_list`, `github_auth_status`, `github_repo_view`,
+`github_workflow_list`, `github_workflow_runs`, `github_workflow_run_view`,
+`github_release_list`, `github_release_view`, `github_pr_list`, and
+`github_pr_view`.
+
+Repository and GitHub writes are user-initiated local CLI operations. Examples:
+
+```text
+clops git status --path <repo>
+clops git commit --path <repo> -m "message" --add <pathspec>
+clops git push --path <repo> --remote origin [--branch <branch>] [--async]
+clops git publish --path <repo> --remote origin [--branch <branch>]
+clops github auth-status
+clops github workflow-status --path <repo>
+clops github release-create --path <repo> --tag <existing-tag>
+```
+
+Local write commands are restricted to trusted repositories, require the local
+write permission profile (`DEVELOPER`/`FULL`, or the existing expert-mode
+override), and are audited with secret redaction. The narrow push API does not
+accept force push/refspecs. GitHub child processes remove `GH_TOKEN` and
+`GITHUB_TOKEN` from their child environment so host `gh auth` credentials can
+be used without changing the user's global environment or exposing tokens in
+normal output. This split is a deliberate security boundary, not a missing
+feature.
+
 Command output is bounded and common secret patterns are redacted before normal
 tool exposure. OBS credentials are kept in the configured secret store and are
 not returned by status calls. Public OBS streaming requires an explicit opt-in

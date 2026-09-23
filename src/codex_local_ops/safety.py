@@ -11,6 +11,7 @@ from .config import load_config
 SECRET_PATTERNS = [
     re.compile(r"(?i)(password|token|secret|authorization|cookie|session|api[_-]?key|github[_-]?pat|obs[_-]?password)\s*[:=]\s*([^\s,;]+)"),
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S),
 ]
 
@@ -22,6 +23,8 @@ def redact_text(value: str) -> str:
             out = pattern.sub("[REDACTED_PRIVATE_KEY]", out)
         elif "bearer" in pattern.pattern.lower():
             out = pattern.sub("Bearer [REDACTED]", out)
+        elif "github_pat_" in pattern.pattern:
+            out = pattern.sub("[REDACTED_GITHUB_TOKEN]", out)
         else:
             out = pattern.sub(lambda m: f"{m.group(1)}=[REDACTED]", out)
     return out
