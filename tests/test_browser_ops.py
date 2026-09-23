@@ -58,9 +58,11 @@ def test_browser_rejects_unknown_url_scheme() -> None:
 
 
 def test_browser_system_executable_falls_back_to_path(monkeypatch) -> None:
-    monkeypatch.setattr(browser_ops.shutil, "which", lambda name: "C:/browser/chrome.exe" if name == "chrome.exe" else None)
+    executable_name = "chrome.exe" if browser_ops.os.name == "nt" else "chromium"
+    executable_path = "C:/browser/chrome.exe" if browser_ops.os.name == "nt" else "/browser/chromium"
+    monkeypatch.setattr(browser_ops.shutil, "which", lambda name: executable_path if name == executable_name else None)
 
-    assert browser_ops._find_system_browser_executable() == "C:/browser/chrome.exe"
+    assert browser_ops._find_system_browser_executable() == executable_path
 
 
 def test_browser_inaccessible_candidate_is_treated_as_missing() -> None:

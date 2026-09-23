@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+
+import pytest
 
 from codex_local_ops.safety import redact_text, sanitize
 from codex_local_ops.wsl_ops import path_translate
@@ -22,6 +25,7 @@ def test_sanitize_keeps_job_session_id():
     assert result["session_token"] == "[REDACTED]"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows path translation requires Windows pathlib semantics")
 def test_windows_path_translation():
     translated = path_translate(r"D:\Projects\demo")
     assert translated["status"] == "OK"
