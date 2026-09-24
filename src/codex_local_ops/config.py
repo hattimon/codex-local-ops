@@ -20,6 +20,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "browser": {"enabled": True, "headless": False, "channel": "chromium"},
     "media": {"enabled": True},
     "obs": {"enabled": True, "host": "127.0.0.1", "port": 4455, "allow_public_streaming": False},
+    "agents": {
+        "free_only": True,
+        "endpoint": "http://127.0.0.1:11434/v1",
+        "privacy": {"allow_external_public": True, "allow_external_private": False},
+        "hermes": {"executable": None, "local_timeout": 600, "external_timeout": 120},
+    },
     "privacy": {
         "excluded_apps": [],
         "excluded_window_titles": [],

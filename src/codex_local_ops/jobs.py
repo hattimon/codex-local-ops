@@ -17,7 +17,7 @@ from .config import install_root
 from .safety import redact_text
 
 
-TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "FINISHED_EXIT_UNKNOWN"}
+TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "FINISHED_EXIT_UNKNOWN"}
 _STATE_LOCK = threading.RLock()
 
 
@@ -82,9 +82,9 @@ def _pid_alive(pid: int | None) -> bool:
         return False
 
 
-def _watch(proc: subprocess.Popen[Any], state_path: Path, started: float) -> None:
+def _watch(proc: subprocess.Popen[Any], state_path: Path, started: float, timeout: int | None = None) -> None:
     try:
-        exit_code = proc.wait()
+        exit_code = proc.wait(timeout=timeout)
         with _STATE_LOCK:
             state = _read_json(state_path)
             cleanup_complete = _cleanup_paths(state)
@@ -93,6 +93,22 @@ def _watch(proc: subprocess.Popen[Any], state_path: Path, started: float) -> Non
                     {
                         "status": "COMPLETED" if exit_code == 0 else "FAILED",
                         "exit_code": exit_code,
+                        "finished_at": _now(),
+                        "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                        "cleanup_complete": cleanup_complete,
+                    }
+                )
+                _write_json(state_path, state)
+    except subprocess.TimeoutExpired:
+        _terminate_tree(proc.pid)
+        with _STATE_LOCK:
+            state = _read_json(state_path)
+            cleanup_complete = _cleanup_paths(state)
+            if state.get("status") != "CANCELLED":
+                state.update(
+                    {
+                        "status": "TIMEOUT",
+                        "exit_code": None,
                         "finished_at": _now(),
                         "duration_ms": round((time.monotonic() - started) * 1000, 1),
                         "cleanup_complete": cleanup_complete,
@@ -125,10 +141,13 @@ def start(
     label: str | None = None,
     cleanup_paths: Iterable[Path | str] | None = None,
     env: dict[str, str] | None = None,
+    timeout: int | None = None,
 ) -> dict[str, Any]:
     args = [str(x) for x in argv]
     if not args:
         raise ValueError("argv must not be empty")
+    if timeout is not None and int(timeout) < 1:
+        raise ValueError("timeout must be at least one second")
 
     session_id = f"job_{uuid.uuid4().hex}"
     session_dir = _root() / session_id
@@ -143,6 +162,7 @@ def start(
         "created_at": created_at,
         "child_pid": None,
         "exit_code": None,
+        "timeout_seconds": int(timeout) if timeout is not None else None,
         "cleanup_complete": False,
         "_cleanup_paths": [str(Path(x)) for x in (cleanup_paths or [])],
     }
@@ -174,7 +194,7 @@ def start(
         _write_json(session_dir / "state.json", state)
     threading.Thread(
         target=_watch,
-        args=(proc, session_dir / "state.json", time.monotonic()),
+        args=(proc, session_dir / "state.json", time.monotonic(), int(timeout) if timeout is not None else None),
         name=f"codexLocalOps-{session_id}",
         daemon=True,
     ).start()

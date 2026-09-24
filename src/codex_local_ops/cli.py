@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any, Callable
 
 from . import git_ops
 from .audit import emit
+from .agent_runtime import AgentRuntime
 from .config import ensure_config
 from .diagnostics import run_diagnostics
 from .manager import run_manager
@@ -72,6 +74,72 @@ def _print_result(result: dict[str, Any]) -> None:
         raise SystemExit(1)
 
 
+def _agent_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep the public CLI result stable and independent of adapter internals."""
+    return sanitize(
+        {
+            "job_id": result.get("job_id"),
+            "status": result.get("status"),
+            "provider": result.get("selected_provider"),
+            "model": result.get("selected_model"),
+            "attempts": result.get("attempts", []),
+            "fallback_history": result.get("fallback_history", []),
+            "stdout": result.get("stdout", ""),
+            "stderr": result.get("stderr", ""),
+            "duration": result.get("duration_ms", 0),
+            "usage": result.get("usage", {}),
+            "error": result.get("error"),
+            "base_head": result.get("base_head"),
+            "branch": result.get("branch"),
+            "changed_files": result.get("changed_files", []),
+            "diff_summary": result.get("diff_summary", {}),
+            "repo_lock_status": result.get("repo_lock_status"),
+        }
+    )
+
+
+def _print_agent_result(result: dict[str, Any], *, json_output: bool) -> None:
+    if json_output:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print(f"Job: {result.get('job_id')}")
+        print(f"Status: {result.get('status')}")
+        print(f"Provider: {result.get('provider') or '-'}")
+        print(f"Model: {result.get('model') or '-'}")
+        print(f"Fallback used: {'yes' if result.get('fallback_history') else 'no'}")
+        print(f"Duration: {result.get('duration', 0)} ms")
+        changed_files = result.get("changed_files", [])
+        print(f"Changed files: {len(changed_files)}")
+        if changed_files:
+            print("Paths: " + ", ".join(changed_files[:20]))
+        if result.get("stdout"):
+            print("Output:")
+            print(result["stdout"])
+        if result.get("stderr"):
+            print("Stderr:")
+            print(result["stderr"])
+        if result.get("error"):
+            print(f"Error: {result['error']}")
+    if result.get("status") != "COMPLETED":
+        raise SystemExit(1)
+
+
+def _run_agent(args: argparse.Namespace) -> dict[str, Any]:
+    if args.timeout is not None and args.timeout < 1:
+        raise ValueError("timeout must be at least one second")
+    # ``_repo_root`` performs the existing trusted-root, symlink and Git-worktree checks.
+    repo_root, _ = git_ops._repo_root(args.repo)
+    runtime = AgentRuntime()
+    return runtime.run(
+        args.task,
+        repo_root,
+        sensitivity=args.sensitivity,
+        preferred_provider=args.provider,
+        preferred_model=args.model,
+        timeout=args.timeout,
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="clops")
     commands = parser.add_subparsers(dest="command")
@@ -81,6 +149,17 @@ def _build_parser() -> argparse.ArgumentParser:
     commands.add_parser("manager")
     commands.add_parser("wizard")
     commands.add_parser("first-run-status")
+
+    agent_parser = commands.add_parser("agent", help="Run a local coding agent without publishing changes")
+    agent_commands = agent_parser.add_subparsers(dest="agent_command", required=True)
+    agent_run = agent_commands.add_parser("run", help="Run an approved local agent task in a trusted Git repository")
+    agent_run.add_argument("--repo", required=True)
+    agent_run.add_argument("--task", required=True)
+    agent_run.add_argument("--sensitivity", choices=("public", "private", "sensitive"), default="private")
+    agent_run.add_argument("--provider")
+    agent_run.add_argument("--model")
+    agent_run.add_argument("--timeout", type=int)
+    agent_run.add_argument("--json", dest="json_output", action="store_true")
 
     git_parser = commands.add_parser("git", help="Local Git operations")
     git_commands = git_parser.add_subparsers(dest="git_command", required=True)
@@ -141,6 +220,37 @@ def main() -> None:
         return
     if args.command == "first-run-status":
         print(json.dumps(first_run_status(), indent=2, ensure_ascii=False))
+        return
+
+    if args.command == "agent":
+        audit_args = {
+            "path": args.repo,
+            "sensitivity": args.sensitivity,
+            "requested_provider": args.provider,
+            "requested_model": args.model,
+            "task_sha256": hashlib.sha256(args.task.encode("utf-8")).hexdigest(),
+        }
+
+        def action() -> dict[str, Any]:
+            try:
+                raw = _run_agent(args)
+            except PermissionError as exc:
+                raw = {"status": "FAILED", "error": str(exc)}
+            except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
+                raw = {"status": "FAILED", "error": str(exc)}
+            result = _agent_result(raw)
+            audit_args.update(
+                {
+                    "job_id": result.get("job_id"),
+                    "actual_provider": result.get("provider"),
+                    "actual_model": result.get("model"),
+                    "fallback_reason": (result.get("fallback_history") or [{}])[-1].get("reason"),
+                }
+            )
+            return result
+
+        result = _local_action("cli_agent_run", audit_args, action, write=True)
+        _print_agent_result(result, json_output=args.json_output)
         return
 
     if args.command == "git":

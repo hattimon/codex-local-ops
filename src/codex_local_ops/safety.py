@@ -9,11 +9,20 @@ from .config import load_config
 
 
 SECRET_PATTERNS = [
-    re.compile(r"(?i)(password|token|secret|authorization|cookie|session|api[_-]?key|github[_-]?pat|obs[_-]?password)\s*[:=]\s*([^\s,;]+)"),
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"(?i)(password|token|secret|authorization|cookie|session|api[_-]?key|github[_-]?pat|obs[_-]?password)\s*[:=]\s*([^\s,;]+)"),
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S),
 ]
+
+USAGE_METRIC_KEYS = {
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "reasoning_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+}
 
 
 def redact_text(value: str) -> str:
@@ -39,6 +48,8 @@ def sanitize(value: Any) -> Any:
             name = str(key)
             normalized = name.lower().replace("-", "_")
             if normalized == "session_id":
+                out[name] = sanitize(item)
+            elif normalized in USAGE_METRIC_KEYS:
                 out[name] = sanitize(item)
             elif any(marker in normalized for marker in ("password", "secret", "token", "authorization", "cookie", "session", "api_key", "apikey", "private_key")):
                 out[name] = "[REDACTED]"
