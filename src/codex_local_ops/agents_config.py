@@ -21,6 +21,11 @@ MANAGED_POLICY_LINES = (
     "- If an example or referenced project path is missing, search for the intended existing project or report ambiguity instead of creating the example path automatically.",
     "- A Native2 or restricted sandbox failure to launch a Windows executable does not prove that the Windows host component is broken.",
     "- Do not bootstrap or reinstall Local Ops merely because a Native2 sandbox cannot launch host executables.",
+    "- If Web/Native2 cannot execute the known Windows Python/runtime, report the harness restriction instead of treating it as host failure.",
+    "- Do not search for unrelated Python installations or use Nmap/embedded Python as a substitute runtime.",
+    "- Do not copy Python launchers or DLLs into the workspace to bypass a harness execution restriction.",
+    "- Do not repair or reinstall a working virtual environment merely because the harness cannot execute it.",
+    "- Provide the exact safe Windows PowerShell validation command and continue after the user supplies its result.",
     "- Local project editing, testing, and building are allowed inside trusted workspaces.",
     "- Do not use destructive Git operations such as hard reset, destructive clean, force push, or published-history rewrite.",
     "- Paid AI APIs require explicit user approval.",
@@ -40,6 +45,17 @@ class AgentsConfigResult:
     backup: BackupRecord | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class AgentsConfigInspection:
+    path: str
+    exists: bool
+    valid: bool
+    installed: bool
+    current: bool
+    block_version: int | None = None
+    error: str | None = None
+
+
 def agents_path(user_home: Path | None = None) -> Path:
     home = Path(user_home) if user_home is not None else Path.home()
     return home / ".codex" / "AGENTS.md"
@@ -51,6 +67,29 @@ def agents_backup_root(root: Path | None = None) -> Path:
 
 def render_managed_block(*, newline: str = "\n") -> str:
     return newline.join((BEGIN_MARKER, *MANAGED_POLICY_LINES, END_MARKER))
+
+
+def inspect_managed_agents(*, path: Path | None = None, user_home: Path | None = None) -> AgentsConfigInspection:
+    target = Path(path) if path is not None else agents_path(user_home)
+    if not target.exists():
+        return AgentsConfigInspection(str(target), False, True, False, False)
+    try:
+        text = _read_text_preserve_newlines(target)
+        span = _managed_span(text)
+    except (OSError, UnicodeError, AgentsConfigError) as exc:
+        return AgentsConfigInspection(str(target), True, False, False, False, error=str(exc))
+    if span is None:
+        return AgentsConfigInspection(str(target), True, True, False, False)
+    newline = _detect_newline(text)
+    current = text[span[0] : span[1]] == render_managed_block(newline=newline)
+    return AgentsConfigInspection(
+        str(target),
+        True,
+        True,
+        True,
+        current,
+        MANAGED_BLOCK_VERSION if current else None,
+    )
 
 
 def _read_text_preserve_newlines(path: Path) -> str:

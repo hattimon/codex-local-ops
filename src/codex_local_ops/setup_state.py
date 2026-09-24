@@ -85,6 +85,9 @@ class BackupReference:
     backup_path: str | None
     sha256: str | None
     existed: bool
+    transaction_id: str | None = None
+    size: int = 0
+    created_at: str | None = None
 
 
 @dataclass(slots=True)
@@ -101,6 +104,7 @@ class RollbackMetadata:
     reason: str | None = None
     config_backup_id: str | None = None
     agents_backup_id: str | None = None
+    setup_config_backup_id: str | None = None
     previous_runtime_path: str | None = None
     activation_transaction_id: str | None = None
     activation_record_path: str | None = None
