@@ -24,6 +24,18 @@ class CodexConfigResult:
     backup: BackupRecord | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CodexConfigInspection:
+    path: str
+    exists: bool
+    valid: bool
+    registered: bool
+    runtime_python: str | None
+    expected_runtime_python: str | None
+    matches_expected: bool
+    error: str | None = None
+
+
 def codex_config_path(user_home: Path | None = None) -> Path:
     home = Path(user_home) if user_home is not None else Path.home()
     return home / ".codex" / "config.toml"
@@ -72,6 +84,66 @@ def _registration_matches(document, runtime_python: Path) -> bool:
     except (AttributeError, TypeError):
         return False
     return command == str(runtime_python) and args == ["-m", "codex_local_ops.server"]
+
+
+def inspect_codex_mcp(
+    *,
+    path: Path | None = None,
+    user_home: Path | None = None,
+    expected_runtime_python: Path | None = None,
+) -> CodexConfigInspection:
+    """Read the managed MCP entry without mutating Codex configuration."""
+    target = Path(path) if path is not None else codex_config_path(user_home)
+    expected = Path(expected_runtime_python) if expected_runtime_python is not None else None
+    if not target.exists():
+        return CodexConfigInspection(
+            path=str(target),
+            exists=False,
+            valid=True,
+            registered=False,
+            runtime_python=None,
+            expected_runtime_python=str(expected) if expected is not None else None,
+            matches_expected=False,
+        )
+    try:
+        document = _parse(_read_text(target), target)
+    except CodexConfigError as exc:
+        return CodexConfigInspection(
+            path=str(target),
+            exists=True,
+            valid=False,
+            registered=False,
+            runtime_python=None,
+            expected_runtime_python=str(expected) if expected is not None else None,
+            matches_expected=False,
+            error=str(exc),
+        )
+
+    runtime_python: str | None = None
+    registered = False
+    mcp_servers = document.get("mcp_servers")
+    if hasattr(mcp_servers, "get"):
+        entry = mcp_servers.get("codexLocalOps")
+        if hasattr(entry, "get"):
+            try:
+                command = entry.get("command")
+                args = list(entry.get("args") or [])
+            except (AttributeError, TypeError):
+                command = None
+                args = []
+            if command is not None and args == ["-m", "codex_local_ops.server"]:
+                runtime_python = str(command)
+                registered = True
+
+    return CodexConfigInspection(
+        path=str(target),
+        exists=True,
+        valid=True,
+        registered=registered,
+        runtime_python=runtime_python,
+        expected_runtime_python=str(expected) if expected is not None else None,
+        matches_expected=registered and expected is not None and runtime_python == str(expected),
+    )
 
 
 def _set_registration(document, runtime_python: Path) -> None:

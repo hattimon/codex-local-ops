@@ -71,6 +71,9 @@ class RuntimeRecord:
     source_commit: str | None = None
     python_version: str | None = None
     features: list[str] = field(default_factory=list)
+    artifact_name: str | None = None
+    artifact_sha256: str | None = None
+    validation_status: str | None = None
     known_good_at: str | None = None
 
 
@@ -98,6 +101,9 @@ class RollbackMetadata:
     reason: str | None = None
     config_backup_id: str | None = None
     agents_backup_id: str | None = None
+    previous_runtime_path: str | None = None
+    activation_transaction_id: str | None = None
+    activation_record_path: str | None = None
 
 
 @dataclass(slots=True)
