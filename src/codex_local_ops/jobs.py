@@ -7,22 +7,23 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import psutil
 
 from .config import install_root
+from .processes import terminate_process_tree
 from .safety import redact_text
-
 
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "FINISHED_EXIT_UNKNOWN"}
 _STATE_LOCK = threading.RLock()
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _root() -> Path:
@@ -53,6 +54,7 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 def _public_state(state: dict[str, Any]) -> dict[str, Any]:
     result = dict(state)
     result.pop("_cleanup_paths", None)
+    result.pop("_resume_key", None)
     if "argv" in result:
         result["argv"] = [redact_text(str(x)) for x in result["argv"]]
     return result
@@ -100,7 +102,7 @@ def _watch(proc: subprocess.Popen[Any], state_path: Path, started: float, timeou
                 )
                 _write_json(state_path, state)
     except subprocess.TimeoutExpired:
-        _terminate_tree(proc.pid)
+        terminate_process_tree(proc.pid)
         with _STATE_LOCK:
             state = _read_json(state_path)
             cleanup_complete = _cleanup_paths(state)
@@ -115,7 +117,7 @@ def _watch(proc: subprocess.Popen[Any], state_path: Path, started: float, timeou
                     }
                 )
                 _write_json(state_path, state)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - watcher boundary must persist a structured failure.
         try:
             with _STATE_LOCK:
                 state = _read_json(state_path)
@@ -130,7 +132,7 @@ def _watch(proc: subprocess.Popen[Any], state_path: Path, started: float, timeou
                         }
                     )
                     _write_json(state_path, state)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - secondary persistence failure cannot escape watcher.
             pass
 
 
@@ -142,6 +144,7 @@ def start(
     cleanup_paths: Iterable[Path | str] | None = None,
     env: dict[str, str] | None = None,
     timeout: int | None = None,
+    resume_key: str | None = None,
 ) -> dict[str, Any]:
     args = [str(x) for x in argv]
     if not args:
@@ -165,6 +168,7 @@ def start(
         "timeout_seconds": int(timeout) if timeout is not None else None,
         "cleanup_complete": False,
         "_cleanup_paths": [str(Path(x)) for x in (cleanup_paths or [])],
+        "_resume_key": resume_key,
     }
     with _STATE_LOCK:
         _write_json(session_dir / "state.json", state)
@@ -203,7 +207,48 @@ def start(
         "session_id": session_id,
         "child_pid": proc.pid,
         "created_at": created_at,
+        "resumed": False,
     }
+
+
+def start_or_resume(
+    argv: Iterable[str],
+    *,
+    cwd: Path | None = None,
+    label: str | None = None,
+    cleanup_paths: Iterable[Path | str] | None = None,
+    env: dict[str, str] | None = None,
+    timeout: int | None = None,
+    resume_key: str,
+) -> dict[str, Any]:
+    if not resume_key:
+        raise ValueError("resume_key must not be empty")
+    with _STATE_LOCK:
+        for item in sorted(_root().glob("job_*"), key=lambda path: path.stat().st_mtime, reverse=True):
+            try:
+                state = _read_json(item / "state.json")
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if state.get("_resume_key") != resume_key:
+                continue
+            refreshed = status(item.name)
+            if refreshed.get("status") not in TERMINAL_STATES:
+                return {
+                    "status": "STARTED",
+                    "session_id": refreshed["session_id"],
+                    "child_pid": refreshed.get("child_pid"),
+                    "created_at": refreshed.get("created_at"),
+                    "resumed": True,
+                }
+        return start(
+            argv,
+            cwd=cwd,
+            label=label,
+            cleanup_paths=cleanup_paths,
+            env=env,
+            timeout=timeout,
+            resume_key=resume_key,
+        )
 
 
 def status(session_id: str) -> dict[str, Any]:
@@ -262,35 +307,13 @@ def output(session_id: str, *, max_bytes: int = 200_000) -> dict[str, Any]:
     }
 
 
-def _terminate_tree(pid: int | None) -> None:
-    if not pid:
-        return
-    try:
-        proc = psutil.Process(int(pid))
-    except (psutil.Error, ValueError, TypeError):
-        return
-    targets = proc.children(recursive=True)
-    targets.append(proc)
-    for item in reversed(targets):
-        try:
-            item.terminate()
-        except psutil.Error:
-            pass
-    _, alive = psutil.wait_procs(targets, timeout=2)
-    for item in alive:
-        try:
-            item.kill()
-        except psutil.Error:
-            pass
-
-
 def cancel(session_id: str) -> dict[str, Any]:
     state_path = _session_dir(session_id) / "state.json"
     with _STATE_LOCK:
         state = _read_json(state_path)
         if state.get("status") in TERMINAL_STATES:
             return _public_state(state)
-        _terminate_tree(state.get("child_pid"))
+        terminate_process_tree(state.get("child_pid"))
         state.update(
             {
                 "status": "CANCELLED",

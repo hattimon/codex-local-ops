@@ -192,6 +192,17 @@ Use async/session jobs for commands that could outlive a normal MCP request:
 the child process to finish. Job state and redacted output are persisted, and
 registered temporary paths are cleaned after completion or cancellation.
 
+Synchronous process execution has a hard internal budget of 180 seconds, kept
+safely below the outer MCP deadline. `local_shell_run` automatically routes
+known long-running commands such as `pytest`, `python/py -m unittest`, build
+operations, Docker builds, long validation scripts, and FFmpeg transforms into
+the persistent async job system. Repeating the same still-running routed command
+recovers its existing `session_id` instead of starting a duplicate process.
+
+If a short synchronous command reaches its effective timeout, Local Ops
+terminates that execution's process tree, captures bounded remaining output, and
+returns `TIMED_OUT` rather than holding the MCP request open.
+
 Typical lifecycle:
 
 ```text

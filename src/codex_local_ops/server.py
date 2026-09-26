@@ -5,19 +5,20 @@ structured results so a client does not lose the MCP session after one bad call.
 """
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import shutil
 import sys
 import time
-import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from . import __version__
 from . import (
+    __version__,
     animation_ops,
     browser_ops,
     desktop_ops,
@@ -37,7 +38,7 @@ from .config import ensure_config, install_root, load_config, save_config
 from .diagnostics import run_diagnostics
 from .models import failed
 from .platforms import current_backend
-from .processes import run
+from .processes import execution_resume_key, run, shell_execution_policy
 from .safety import (
     assert_trusted_path,
     computer_mode,
@@ -48,7 +49,6 @@ from .safety import (
     trusted_roots,
 )
 from .secrets import current_secret_store
-
 
 # The transport exclusively owns stdout; audit records are written to a file.
 logging.getLogger("mcp").setLevel(logging.WARNING)
@@ -68,12 +68,12 @@ def _result(tool: str, args: dict[str, Any], callback: Callable[[], dict[str, An
         result = {"status": "PERMISSION_DENIED", "reason": str(exc)}
     except FileNotFoundError as exc:
         result = {"status": "NOT_FOUND", "reason": str(exc)}
-    except Exception as exc:  # boundary: never crash an MCP session for one call
+    except Exception as exc:  # noqa: BLE001 - boundary must never crash an MCP session for one call.
         result = failed(str(exc), platform.system().lower())
     result = sanitize(result)
     try:
         emit(tool, args, result, started, approval_class="raw" if raw else "standard")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - audit failure must not replace the tool result.
         pass
     return result
 
@@ -82,18 +82,51 @@ def _shell_exe() -> str | None:
     return shutil.which("pwsh") or shutil.which("powershell") or os.environ.get("COMSPEC")
 
 
-def _raw_shell(command: str, cwd: str | None, timeout: int) -> dict:
-    root = assert_trusted_path(cwd, must_exist=True) if cwd else None
+def _shell_argv(command: str) -> list[str] | None:
     executable = _shell_exe()
     if not executable:
-        return {"status": "CAPABILITY_UNAVAILABLE", "reason": "No local shell executable found"}
+        return None
     if Path(executable).name.lower() in {"powershell.exe", "pwsh.exe"}:
-        args = [executable, "-NoProfile", "-NonInteractive", "-Command", command]
-    else:
-        args = [executable, "/d", "/s", "/c", command]
+        return [executable, "-NoProfile", "-NonInteractive", "-Command", command]
+    return [executable, "/d", "/s", "/c", command]
+
+
+def _raw_shell(command: str, cwd: str | None, timeout: int) -> dict:
+    root = assert_trusted_path(cwd, must_exist=True) if cwd else None
+    args = _shell_argv(command)
+    if not args:
+        return {"status": "CAPABILITY_UNAVAILABLE", "reason": "No local shell executable found"}
     result = run(args, cwd=root, timeout=timeout)
-    result["status"] = "OK" if result.get("exit_code") == 0 else "FAILED"
+    if result.get("timed_out"):
+        result["status"] = "TIMED_OUT"
+    else:
+        result["status"] = "OK" if result.get("exit_code") == 0 else "FAILED"
     return result
+
+
+def _local_shell_action(command: str, cwd: str | None, timeout: int) -> dict:
+    root = assert_trusted_path(cwd, must_exist=True) if cwd else None
+    args = _shell_argv(command)
+    if not args:
+        return {"status": "CAPABILITY_UNAVAILABLE", "reason": "No local shell executable found"}
+    policy = shell_execution_policy(command, timeout)
+    if policy["mode"] == "ASYNC":
+        started = jobs.start_or_resume(
+            args,
+            cwd=root,
+            label=f"local_shell_run:{policy.get('category') or 'long-timeout'}",
+            timeout=int(timeout),
+            resume_key=execution_resume_key(args, root),
+        )
+        return {
+            **started,
+            "execution_mode": "async",
+            "routing_reason": policy["reason"],
+            "requested_timeout_seconds": int(timeout),
+            "sync_budget_seconds": policy["sync_budget_seconds"],
+            "next": "Poll the same session_id with job_status/job_output; do not restart the command.",
+        }
+    return _raw_shell(command, cwd, timeout)
 
 
 def _powershell(script: str, cwd: str | None, timeout: int) -> dict:
@@ -128,7 +161,12 @@ def local_shell_info() -> dict:
 
 @mcp.tool(name="local_shell_run")
 def local_shell_run(command: str, cwd: str | None = None, timeout: int = 120) -> dict:
-    return _result("local_shell_run", {"command": command, "path": cwd}, lambda: _raw_shell(command, cwd, timeout), raw=True)
+    return _result(
+        "local_shell_run",
+        {"command": command, "path": cwd, "timeout": timeout},
+        lambda: _local_shell_action(command, cwd, timeout),
+        raw=True,
+    )
 
 
 @mcp.tool(name="powershell_run")

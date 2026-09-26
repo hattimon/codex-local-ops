@@ -195,6 +195,17 @@ Dla komend, które mogą trwać dłużej niż zwykłe wywołanie MCP, używaj:
 procesu potomnego. Stan i zredagowany output są zapisywane, a zarejestrowane
 ścieżki tymczasowe są czyszczone po zakończeniu lub anulowaniu.
 
+Synchroniczne uruchamianie procesów ma twardy wewnętrzny budżet 180 sekund,
+bezpiecznie poniżej zewnętrznego limitu MCP. `local_shell_run` automatycznie
+kieruje znane długie komendy, m.in. `pytest`, `python/py -m unittest`, operacje
+build, Docker build, długie skrypty walidacyjne i transformacje FFmpeg, do
+trwałego systemu async jobs. Ponowienie tej samej nadal działającej komendy
+odzyskuje istniejący `session_id`, zamiast uruchamiać drugi proces.
+
+Jeżeli krótka komenda synchroniczna osiągnie efektywny timeout, Local Ops kończy
+drzewo procesów należące do tego wykonania, zbiera ograniczony końcowy output i
+zwraca `TIMED_OUT`, zamiast utrzymywać wywołanie MCP do limitu protokołu.
+
 Typowy lifecycle:
 
 ```text
