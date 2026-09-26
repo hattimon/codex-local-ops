@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -214,6 +216,56 @@ def test_async_shell_route_deduplicates_immediately(tmp_path: Path, monkeypatch)
         assert second["resumed"] is True
         assert len(launches) == 2  # route resolution; only one process is actually started
         assert jobs.list_jobs()["count"] == 1
+    finally:
+        jobs.cancel(first["session_id"])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="public MCP subprocess regression is Windows-specific")
+def test_public_local_shell_run_resumes_across_server_processes(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "shared-local-ops-home"
+    cwd = tmp_path / "working-directory"
+    cwd.mkdir()
+    monkeypatch.setenv("CODEX_LOCAL_OPS_HOME", str(home))
+    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = source_root + os.pathsep + environment.get("PYTHONPATH", "")
+    command = "Start-Sleep -Seconds 30"
+    resume_key = "public-boundary-fixed-key"
+    invoke = (
+        "import json; from pathlib import Path; "
+        "from codex_local_ops import server; "
+        "server.require_raw_execution = lambda: None; "
+        "server.emit = lambda *args, **kwargs: None; "
+        "server.assert_trusted_path = lambda path, must_exist=False: Path(path).resolve(); "
+        "payload=json.loads(__import__('sys').stdin.read()); "
+        "print(json.dumps(server.local_shell_run(**payload)))"
+    )
+
+    def call_in_new_server_process() -> dict:
+        result = subprocess.run(
+            [sys.executable, "-c", invoke],
+            input=json.dumps({"command": command, "cwd": str(cwd), "timeout": 181, "resume_key": resume_key}),
+            text=True,
+            capture_output=True,
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            timeout=15,
+            check=True,
+        )
+        return json.loads(result.stdout)
+
+    first = call_in_new_server_process()
+    second = call_in_new_server_process()
+    try:
+        assert first["session_id"] == second["session_id"]
+        assert first["resumed"] is False
+        assert second["resumed"] is True
+        persisted = jobs.list_jobs()
+        assert persisted["count"] == 1
+        matching = [job for job in persisted["jobs"] if job["session_id"] == first["session_id"]]
+        assert len(matching) == 1
+        assert matching[0]["status"] == "RUNNING"
+        assert jobs._root() == home / "jobs"
     finally:
         jobs.cancel(first["session_id"])
 

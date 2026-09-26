@@ -104,7 +104,7 @@ def _raw_shell(command: str, cwd: str | None, timeout: int) -> dict:
     return result
 
 
-def _local_shell_action(command: str, cwd: str | None, timeout: int) -> dict:
+def _local_shell_action(command: str, cwd: str | None, timeout: int, resume_key: str | None = None) -> dict:
     root = assert_trusted_path(cwd, must_exist=True) if cwd else None
     args = _shell_argv(command)
     if not args:
@@ -116,7 +116,7 @@ def _local_shell_action(command: str, cwd: str | None, timeout: int) -> dict:
             cwd=root,
             label=f"local_shell_run:{policy.get('category') or 'long-timeout'}",
             timeout=int(timeout),
-            resume_key=execution_resume_key(args, root),
+            resume_key=resume_key or execution_resume_key(args, root),
         )
         return {
             **started,
@@ -160,11 +160,11 @@ def local_shell_info() -> dict:
 
 
 @mcp.tool(name="local_shell_run")
-def local_shell_run(command: str, cwd: str | None = None, timeout: int = 120) -> dict:
+def local_shell_run(command: str, cwd: str | None = None, timeout: int = 120, resume_key: str | None = None) -> dict:
     return _result(
         "local_shell_run",
-        {"command": command, "path": cwd, "timeout": timeout},
-        lambda: _local_shell_action(command, cwd, timeout),
+        {"command": command, "path": cwd, "timeout": timeout, "resume_key": resume_key},
+        lambda: _local_shell_action(command, cwd, timeout, resume_key),
         raw=True,
     )
 
