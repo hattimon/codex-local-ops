@@ -144,3 +144,15 @@ def test_cancel_and_watcher_do_not_overwrite_terminal_state(tmp_path: Path, monk
     assert settled["status"] == "CANCELLED"
     assert settled["cleanup_complete"] is True
     assert not cleanup.exists()
+
+
+def test_job_timeout_terminates_process_tree(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_LOCAL_OPS_HOME", str(tmp_path / "home"))
+    command = "Start-Sleep -Seconds 5" if os.name == "nt" else "sleep 5"
+
+    started = jobs.start(_short_shell_command(command), timeout=1)
+    final = _wait(started["session_id"], timeout=5)
+
+    assert final["status"] == "TIMEOUT"
+    assert final["exit_code"] is None
+    assert final["cleanup_complete"] is True

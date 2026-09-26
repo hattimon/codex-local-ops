@@ -13,6 +13,50 @@ is the primary platform and has been validated in a real interactive Windows
 session. Linux and macOS backends are implemented, but their native desktop
 validation is still in progress.
 
+## Start here — complete Windows + ChatGPT Web setup
+
+Codex Local Ops is installed **once per Windows user**, not once per repository.
+After the global runtime is healthy, projects are added as trusted roots.
+
+For normal Codex work:
+
+```text
+open the exact project folder
+→ describe the task
+```
+
+For ChatGPT Web through the Full Harness:
+
+```text
+@Codex Native2
+Project NAME.
+→ describe the task
+```
+
+The Setup Assistant tracks the complete chain:
+
+```text
+ChatGPT Web
+→ Codex Native2
+→ Full Harness
+→ Codex
+→ codexLocalOps
+→ Windows host
+```
+
+Current Web setup commands are read-only unless `web-verify --confirm ...` is
+used to record an already completed verification result:
+
+```powershell
+clops setup-assistant web-status
+clops setup-assistant web-plan
+clops setup-assistant web-repair
+clops setup-assistant web-verify
+```
+
+See [ChatGPT Web setup](docs/chatgpt-web-setup.md) and
+[Setup Assistant](docs/setup-assistant.md) for the full flow.
+
 ## Platform status
 
 | Platform | Status | Scope |
@@ -147,6 +191,17 @@ Use async/session jobs for commands that could outlive a normal MCP request:
 `job_start` and `run_script_async` return a `session_id` without waiting for
 the child process to finish. Job state and redacted output are persisted, and
 registered temporary paths are cleaned after completion or cancellation.
+
+Synchronous process execution has a hard internal budget of 180 seconds, kept
+safely below the outer MCP deadline. `local_shell_run` automatically routes
+known long-running commands such as `pytest`, `python/py -m unittest`, build
+operations, Docker builds, long validation scripts, and FFmpeg transforms into
+the persistent async job system. Repeating the same still-running routed command
+recovers its existing `session_id` instead of starting a duplicate process.
+
+If a short synchronous command reaches its effective timeout, Local Ops
+terminates that execution's process tree, captures bounded remaining output, and
+returns `TIMED_OUT` rather than holding the MCP request open.
 
 Typical lifecycle:
 

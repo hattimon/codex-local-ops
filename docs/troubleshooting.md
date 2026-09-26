@@ -61,6 +61,13 @@ job_list
 
 Start should return a `session_id` quickly. Poll status/output with short calls.
 
+`local_shell_run` has a 180-second synchronous safety budget. Known long-running
+test/build/media commands are routed to persistent async jobs automatically. If
+the Web/bridge response disappears, resume by querying the same `session_id`;
+do not launch the test/build again. A short command that exceeds its effective
+timeout returns `TIMED_OUT` after Local Ops terminates its process tree and
+collects bounded stdout/stderr.
+
 ## Windows desktop works manually but fails in Web/Native harness
 
 Restricted harnesses may be unable to access the user's interactive desktop,
