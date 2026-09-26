@@ -141,4 +141,4 @@ def test_codex_config_uses_portable_stable_runtime_for_supplied_home(tmp_path):
         transaction_id="install-home",
     )
     assert result.runtime_python.startswith(str(home))
-    assert str(Path.home()) not in result.path
+    assert Path(result.path) == config

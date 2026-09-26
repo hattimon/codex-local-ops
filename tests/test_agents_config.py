@@ -138,5 +138,8 @@ def test_managed_policy_contains_placeholder_and_host_safety_rules():
     assert "codexLocalOps" in policy
     assert "Native2" in policy
     assert "Do not bootstrap or reinstall Local Ops" in policy
+    assert "%USERPROFILE%\\.codex-local-ops.venv\\Scripts\\python.exe" in policy
+    assert "AUTHORIZATION_REQUIRED" in policy
+    assert "Preserve persistent async jobs" in policy
     assert "Paid AI APIs require explicit user approval" in policy
     assert "Public or remote mutations require approval" in policy

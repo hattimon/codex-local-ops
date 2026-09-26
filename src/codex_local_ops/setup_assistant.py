@@ -18,6 +18,16 @@ from .agents_config import (
     update_managed_agents,
 )
 from .backup_ops import BackupError, BackupRecord, TransactionWriteError, create_backup, restore_backup
+from .bridge_ops import (
+    AUDITED_RELEASE,
+    WebInstallation,
+    detect_web_repairs,
+    detect_windows_installation,
+    inspect_chatgpt_web,
+    plan_web_install_update,
+    read_launcher_state,
+    record_connection_verification,
+)
 from .codex_config import (
     CodexConfigError,
     codex_config_backup_root,
@@ -610,6 +620,95 @@ def run_setup_diagnostics(
             "sections": sections,
         }
     )
+
+
+def run_web_setup_status(
+    *,
+    context: SetupContext,
+    user_home: Path | None = None,
+    appdata: Path | None = None,
+    latest_version: str = AUDITED_RELEASE,
+    installation: WebInstallation | None = None,
+    launcher_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the Web/Native2 setup chain without mutating launcher or ChatGPT state."""
+    local = run_setup_diagnostics(context=context)
+    home = Path(user_home) if user_home is not None else context.active_runtime_path.parent
+    detected = installation or detect_windows_installation(user_home=home, appdata=appdata)
+    observed_launcher_state = (
+        dict(launcher_state)
+        if launcher_state is not None
+        else read_launcher_state(Path(detected.launcher_state_path))
+    )
+    try:
+        state = load_setup_state(context.state_path)
+        connection_chain = state.connection_chain
+    except SetupStateError:
+        connection_chain = {}
+    sections = local.get("sections", {})
+    return inspect_chatgpt_web(
+        installation=detected,
+        launcher_state=observed_launcher_state,
+        latest_version=latest_version,
+        local_ops_status=str(sections.get("LOCAL_OPS", {}).get("status", "NOT_CONFIGURED")),
+        codex_local_ops_status=str(sections.get("CODEX", {}).get("status", "NOT_CONFIGURED")),
+        connection_chain=connection_chain,
+    )
+
+
+def plan_web_setup(
+    *,
+    context: SetupContext,
+    user_home: Path | None = None,
+    appdata: Path | None = None,
+    latest_version: str = AUDITED_RELEASE,
+    installation: WebInstallation | None = None,
+    launcher_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    status = run_web_setup_status(
+        context=context,
+        user_home=user_home,
+        appdata=appdata,
+        latest_version=latest_version,
+        installation=installation,
+        launcher_state=launcher_state,
+    )
+    return plan_web_install_update(status)
+
+
+def plan_web_repair(
+    *,
+    context: SetupContext,
+    user_home: Path | None = None,
+    appdata: Path | None = None,
+    latest_version: str = AUDITED_RELEASE,
+    installation: WebInstallation | None = None,
+    launcher_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    status = run_web_setup_status(
+        context=context,
+        user_home=user_home,
+        appdata=appdata,
+        latest_version=latest_version,
+        installation=installation,
+        launcher_state=launcher_state,
+    )
+    findings = detect_web_repairs(status)
+    local = run_setup_diagnostics(context=context)
+    return sanitize(
+        {
+            "mode": "WEB_REPAIR",
+            "status": "PASS" if not findings else "WAITING_FOR_USER",
+            "local_ops_health": local.get("sections", {}).get("LOCAL_OPS", {}),
+            "findings": list(findings),
+            "rule": "Web integration findings do not trigger Local Ops runtime reinstall.",
+        }
+    )
+
+
+def record_web_verification(*, context: SetupContext, results: dict[str, str]) -> dict[str, Any]:
+    """Persist only whitelisted verification outcomes in Setup Assistant state."""
+    return record_connection_verification(state_path=context.state_path, results=results)
 
 
 def _backup_reference(record: BackupRecord) -> BackupReference:

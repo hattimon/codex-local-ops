@@ -31,7 +31,9 @@ from codex_local_ops.setup_assistant import (
     plan_install,
     plan_rollback,
     plan_update,
+    plan_web_repair,
     run_setup_diagnostics,
+    run_web_setup_status,
 )
 from codex_local_ops.setup_state import (
     RuntimeRecord,
@@ -512,3 +514,80 @@ def test_lifecycle_result_redacts_secrets():
     rendered = json.dumps(result.to_dict())
     assert "super-secret-token" not in rendered
     assert "REDACTED" in rendered
+
+
+def test_web_setup_status_keeps_healthy_local_ops_separate_from_incomplete_web(tmp_path: Path, monkeypatch):
+    context = _context(tmp_path)
+    save_setup_state(SetupState(), context.state_path)
+    monkeypatch.setattr(
+        setup_assistant,
+        "run_setup_diagnostics",
+        lambda **_kwargs: {
+            "sections": {
+                "LOCAL_OPS": {"status": "PASS"},
+                "CODEX": {"status": "PASS"},
+            }
+        },
+    )
+    installation = setup_assistant.WebInstallation(
+        status="PASS",
+        installed=True,
+        install_path=str(tmp_path / "launcher"),
+        executable=str(tmp_path / "launcher" / "Codex Web GPT.exe"),
+        version="6.1.1",
+        version_source="test",
+        launcher_running=True,
+        profile_present=True,
+        launcher_state_path=str(tmp_path / "launcher-state.json"),
+    )
+
+    result = run_web_setup_status(
+        context=context,
+        user_home=tmp_path / "home",
+        installation=installation,
+        launcher_state={"browserSmokePassed": False},
+    )
+
+    steps = {item["name"]: item for item in result["steps"]}
+    assert steps["CODEX_TO_CODEXLOCALOPS"]["status"] == "PASS"
+    assert steps["CHATGPT_LOGIN"]["status"] == "WAITING_FOR_USER"
+    assert result["ready"] is False
+
+
+def test_web_repair_does_not_plan_local_runtime_reinstall(tmp_path: Path, monkeypatch):
+    context = _context(tmp_path)
+    save_setup_state(SetupState(), context.state_path)
+    monkeypatch.setattr(
+        setup_assistant,
+        "run_setup_diagnostics",
+        lambda **_kwargs: {
+            "sections": {
+                "LOCAL_OPS": {"status": "PASS", "active_runtime_exists": True},
+                "CODEX": {"status": "PASS"},
+            }
+        },
+    )
+    installation = setup_assistant.WebInstallation(
+        status="PASS",
+        installed=True,
+        install_path=str(tmp_path / "launcher"),
+        executable=str(tmp_path / "launcher" / "Codex Web GPT.exe"),
+        version="6.1.1",
+        version_source="test",
+        launcher_running=True,
+        profile_present=True,
+        launcher_state_path=str(tmp_path / "launcher-state.json"),
+    )
+
+    result = plan_web_repair(
+        context=context,
+        user_home=tmp_path / "home",
+        installation=installation,
+        launcher_state={"browserSmokePassed": False},
+    )
+
+    assert result["status"] == "WAITING_FOR_USER"
+    assert result["local_ops_health"]["status"] == "PASS"
+    assert result["findings"]
+    assert all(item["repair_scope"] == "chatgpt-web" for item in result["findings"])
+    assert "do not trigger Local Ops runtime reinstall" in result["rule"]

@@ -14,6 +14,51 @@ Projekt jest przygotowywany do pierwszego publicznego prerelease
 interaktywnej sesji Windows. Backend Linux i macOS są zaimplementowane, ale ich
 natywna walidacja desktopowa nadal trwa.
 
+## Zacznij tutaj — kompletna instalacja Windows + ChatGPT Web
+
+Codex Local Ops instaluje się **raz globalnie dla użytkownika Windows**, a nie
+osobno w każdym repozytorium. Po uruchomieniu stabilnego runtime projekty dodaje
+się jako trusted roots.
+
+Dla zwykłego Codexa:
+
+```text
+otwórz dokładny folder projektu
+→ opisz zadanie
+```
+
+Dla ChatGPT Web przez Full Harness:
+
+```text
+@Codex Native2
+Project NAZWA.
+→ opisz zadanie
+```
+
+Setup Assistant śledzi cały łańcuch:
+
+```text
+ChatGPT Web
+→ Codex Native2
+→ Full Harness
+→ Codex
+→ codexLocalOps
+→ host Windows
+```
+
+Komendy statusu i planowania Web są tylko do odczytu. `web-verify --confirm ...`
+zapisuje wyłącznie wynik już wykonanego sprawdzenia:
+
+```powershell
+clops setup-assistant web-status
+clops setup-assistant web-plan
+clops setup-assistant web-repair
+clops setup-assistant web-verify
+```
+
+Pełny opis: [konfiguracja ChatGPT Web](docs/chatgpt-web-setup_PL.md) oraz
+[Setup Assistant](docs/setup-assistant_PL.md).
+
 ## Status platform
 
 | Platforma | Status | Zakres |

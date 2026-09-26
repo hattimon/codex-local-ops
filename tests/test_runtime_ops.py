@@ -475,7 +475,8 @@ def test_runtime_metadata_and_validation_do_not_persist_secrets(tmp_path):
 
 
 def test_stage_and_detection_use_only_explicit_tmp_paths(tmp_path, monkeypatch):
-    real_home = Path.home().resolve()
+    expected_candidate_root = tmp_path / "setup" / "staging" / "safe-home"
+    expected_validation_home = expected_candidate_root / "validation-home"
     base = tmp_path / "base-python.exe"
     base.write_bytes(b"python")
     wheel = tmp_path / "pkg.whl"
@@ -486,7 +487,7 @@ def test_stage_and_detection_use_only_explicit_tmp_paths(tmp_path, monkeypatch):
             _windows_python(Path(args[3]))
         env = kwargs.get("env") or {}
         if env.get("CODEX_LOCAL_OPS_HOME"):
-            assert str(real_home) not in env["CODEX_LOCAL_OPS_HOME"]
+            assert Path(env["CODEX_LOCAL_OPS_HOME"]) == expected_validation_home
         return subprocess.CompletedProcess(args, 0, "", "")
 
     monkeypatch.setattr(runtime_ops, "_run", fake_run)
@@ -497,4 +498,4 @@ def test_stage_and_detection_use_only_explicit_tmp_paths(tmp_path, monkeypatch):
         setup_dir=tmp_path / "setup",
         transaction_id="safe-home",
     )
-    assert str(real_home) not in candidate.candidate_root
+    assert Path(candidate.candidate_root) == expected_candidate_root

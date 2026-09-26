@@ -13,6 +13,50 @@ is the primary platform and has been validated in a real interactive Windows
 session. Linux and macOS backends are implemented, but their native desktop
 validation is still in progress.
 
+## Start here — complete Windows + ChatGPT Web setup
+
+Codex Local Ops is installed **once per Windows user**, not once per repository.
+After the global runtime is healthy, projects are added as trusted roots.
+
+For normal Codex work:
+
+```text
+open the exact project folder
+→ describe the task
+```
+
+For ChatGPT Web through the Full Harness:
+
+```text
+@Codex Native2
+Project NAME.
+→ describe the task
+```
+
+The Setup Assistant tracks the complete chain:
+
+```text
+ChatGPT Web
+→ Codex Native2
+→ Full Harness
+→ Codex
+→ codexLocalOps
+→ Windows host
+```
+
+Current Web setup commands are read-only unless `web-verify --confirm ...` is
+used to record an already completed verification result:
+
+```powershell
+clops setup-assistant web-status
+clops setup-assistant web-plan
+clops setup-assistant web-repair
+clops setup-assistant web-verify
+```
+
+See [ChatGPT Web setup](docs/chatgpt-web-setup.md) and
+[Setup Assistant](docs/setup-assistant.md) for the full flow.
+
 ## Platform status
 
 | Platform | Status | Scope |

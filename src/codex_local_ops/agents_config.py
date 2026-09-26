@@ -7,7 +7,7 @@ from pathlib import Path
 from .backup_ops import BackupRecord, restore_backup, transactional_write_bytes
 from .config import install_root
 
-MANAGED_BLOCK_VERSION = 1
+MANAGED_BLOCK_VERSION = 2
 BEGIN_MARKER = "<!-- CODEX_LOCAL_OPS_SETUP_ASSISTANT_START -->"
 END_MARKER = "<!-- CODEX_LOCAL_OPS_SETUP_ASSISTANT_END -->"
 
@@ -25,7 +25,10 @@ MANAGED_POLICY_LINES = (
     "- Do not search for unrelated Python installations or use Nmap/embedded Python as a substitute runtime.",
     "- Do not copy Python launchers or DLLs into the workspace to bypass a harness execution restriction.",
     "- Do not repair or reinstall a working virtual environment merely because the harness cannot execute it.",
+    "- The Windows development interpreter is `%USERPROFILE%\\.codex-local-ops.venv\\Scripts\\python.exe`; the development venv is a sibling of `.codex-local-ops`, never a nested `.venv` inside it.",
     "- Provide the exact safe Windows PowerShell validation command and continue after the user supplies its result.",
+    "- If Local Ops returns AUTHORIZATION_REQUIRED, PERMISSION_REQUIRED, APPROVAL_REQUIRED, SECURITY_DENIED, or POLICY_DENIED, stop that side effect and wait for the user; never retry it through another executor.",
+    "- Preserve persistent async jobs across Web disconnects; inspect the same job or session before starting another operation.",
     "- Local project editing, testing, and building are allowed inside trusted workspaces.",
     "- Do not use destructive Git operations such as hard reset, destructive clean, force push, or published-history rewrite.",
     "- Paid AI APIs require explicit user approval.",

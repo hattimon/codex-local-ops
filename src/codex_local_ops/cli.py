@@ -4,16 +4,24 @@ import argparse
 import hashlib
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from . import git_ops
-from .audit import emit
 from .agent_runtime import AgentRuntime
+from .audit import emit
 from .config import ensure_config
 from .diagnostics import run_diagnostics
 from .manager import run_manager
 from .safety import require_raw_execution, sanitize
+from .setup_assistant import (
+    default_context,
+    plan_web_repair,
+    plan_web_setup,
+    record_web_verification,
+    run_web_setup_status,
+)
 from .wizard import configure_first_run, first_run_status
 
 
@@ -44,7 +52,7 @@ def _local_action(
         result = {"status": "PERMISSION_DENIED", "reason": str(exc)}
     except FileNotFoundError as exc:
         result = {"status": "NOT_FOUND", "reason": str(exc)}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - CLI boundary returns a structured failure.
         result = {"status": "FAILED", "reason": str(exc)}
     result = sanitize(result)
     try:
@@ -55,7 +63,7 @@ def _local_action(
             started,
             approval_class="local-write" if write else "local-read",
         )
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - audit failure must not replace the command result.
         pass
     return result
 
@@ -150,6 +158,23 @@ def _build_parser() -> argparse.ArgumentParser:
     commands.add_parser("wizard")
     commands.add_parser("first-run-status")
 
+    setup_parser = commands.add_parser("setup-assistant", help="Setup Assistant lifecycle and Web integration")
+    setup_commands = setup_parser.add_subparsers(dest="setup_command", required=True)
+    setup_commands.add_parser("web-status", help="Inspect ChatGPT Web / Native2 setup without changing it")
+    setup_commands.add_parser("web-plan", help="Plan install/update and guided ChatGPT Web setup")
+    setup_commands.add_parser("web-repair", help="Plan Web integration repairs without repairing Local Ops")
+    web_verify = setup_commands.add_parser("web-verify", help="Inspect or record read-only end-to-end verification")
+    web_verify.add_argument(
+        "--confirm",
+        action="append",
+        choices=(
+            "FULL_HARNESS_TO_CODEX",
+            "CODEX_TO_CODEXLOCALOPS",
+            "WINDOWS_HOST_VISIBLE_THROUGH_LOCALOPS",
+        ),
+        default=[],
+    )
+
     agent_parser = commands.add_parser("agent", help="Run a local coding agent without publishing changes")
     agent_commands = agent_parser.add_subparsers(dest="agent_command", required=True)
     agent_run = agent_commands.add_parser("run", help="Run an approved local agent task in a trusted Git repository")
@@ -204,6 +229,22 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.command == "setup-assistant":
+        context = default_context()
+        if args.setup_command == "web-status":
+            result = run_web_setup_status(context=context)
+        elif args.setup_command == "web-plan":
+            result = plan_web_setup(context=context)
+        elif args.setup_command == "web-repair":
+            result = plan_web_repair(context=context)
+        else:
+            if args.confirm:
+                record_web_verification(context=context, results={key: "PASS" for key in args.confirm})
+            result = run_web_setup_status(context=context)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
     config_path = ensure_config()
 
     if args.command in {None, "diagnostics"}:
