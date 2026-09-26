@@ -191,3 +191,66 @@ def test_resume_supervisor_recovers_same_running_job_without_duplicate(tmp_path:
         assert persisted["status"] == "RUNNING"
     finally:
         jobs.cancel(first["session_id"])
+
+
+def test_async_shell_route_deduplicates_immediately(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_LOCAL_OPS_HOME", str(tmp_path / "home"))
+    argv = [sys.executable, "-c", "import time; time.sleep(5)"]
+    launches: list[tuple[str, ...]] = []
+
+    def fake_shell_argv(command: str) -> list[str]:
+        launches.append((command,))
+        return argv
+
+    monkeypatch.setattr(server, "_shell_argv", fake_shell_argv)
+    monkeypatch.setattr(server, "assert_trusted_path", lambda path, must_exist=False: Path(path).resolve())
+    command = "py -3.12 -m unittest discover -s tests"
+    first = server._local_shell_action(command, str(tmp_path), 120)
+    second = server._local_shell_action(command, str(tmp_path), 120)
+
+    try:
+        assert first["session_id"] == second["session_id"]
+        assert first["resumed"] is False
+        assert second["resumed"] is True
+        assert len(launches) == 2  # route resolution; only one process is actually started
+        assert jobs.list_jobs()["count"] == 1
+    finally:
+        jobs.cancel(first["session_id"])
+
+
+def test_resume_key_scope_and_terminal_jobs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_LOCAL_OPS_HOME", str(tmp_path / "home"))
+    running = [sys.executable, "-c", "import time; time.sleep(5)"]
+    first = jobs.start_or_resume(running, cwd=tmp_path, resume_key="key-one")
+    other_key = jobs.start_or_resume(running, cwd=tmp_path, resume_key="key-two")
+    without_key_one = jobs.start(running, cwd=tmp_path)
+    without_key_two = jobs.start(running, cwd=tmp_path)
+
+    try:
+        assert len({first["session_id"], other_key["session_id"]}) == 2
+        assert without_key_one["session_id"] != without_key_two["session_id"]
+    finally:
+        for result in (first, other_key, without_key_one, without_key_two):
+            jobs.cancel(result["session_id"])
+
+    completed_cmd = [sys.executable, "-c", "pass"]
+    completed = jobs.start_or_resume(completed_cmd, cwd=tmp_path, resume_key="completed-key")
+    deadline = time.monotonic() + 5
+    while jobs.status(completed["session_id"])["status"] not in jobs.TERMINAL_STATES:
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
+    restarted = jobs.start_or_resume(completed_cmd, cwd=tmp_path, resume_key="completed-key")
+    try:
+        assert restarted["session_id"] != completed["session_id"]
+        assert restarted["resumed"] is False
+    finally:
+        jobs.cancel(restarted["session_id"])
+
+    cancelled = jobs.start_or_resume(running, cwd=tmp_path, resume_key="cancelled-key")
+    jobs.cancel(cancelled["session_id"])
+    restarted_cancelled = jobs.start_or_resume(running, cwd=tmp_path, resume_key="cancelled-key")
+    try:
+        assert restarted_cancelled["session_id"] != cancelled["session_id"]
+        assert restarted_cancelled["resumed"] is False
+    finally:
+        jobs.cancel(restarted_cancelled["session_id"])

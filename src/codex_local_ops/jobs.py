@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,35 @@ from .safety import redact_text
 
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "FINISHED_EXIT_UNKNOWN"}
 _STATE_LOCK = threading.RLock()
+
+
+@contextmanager
+def _persistent_jobs_lock():
+    """Serialize resume-key lookup and job creation across Local Ops processes."""
+    lock_path = _root() / ".resume-key.lock"
+    with lock_path.open("a+b") as handle:
+        handle.seek(0)
+        if not handle.read(1):
+            handle.seek(0)
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _now() -> str:
@@ -223,7 +253,7 @@ def start_or_resume(
 ) -> dict[str, Any]:
     if not resume_key:
         raise ValueError("resume_key must not be empty")
-    with _STATE_LOCK:
+    with _persistent_jobs_lock(), _STATE_LOCK:
         for item in sorted(_root().glob("job_*"), key=lambda path: path.stat().st_mtime, reverse=True):
             try:
                 state = _read_json(item / "state.json")
