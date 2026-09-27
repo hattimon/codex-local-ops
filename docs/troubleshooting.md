@@ -47,6 +47,15 @@ Typical examples:
 - OBS unavailable: start OBS, enable WebSocket, and configure authentication if
   you intend to use the integration.
 
+## SSH command is denied
+
+SSH `PERMISSION_DENIED` results include structured fields such as `host_profile`,
+`policy_mode`, `command`, a safely derived `path`, `blocking_rule`, and the
+runtime `config` path. Use `blocking_rule` to identify the policy that rejected
+the request. SSH permissions inherit as `READ_ONLY ⊂ OPERATIONS ⊂ FULL`. A
+`FULL` host can use bounded `OPERATIONS` commands without expert mode; expert
+mode is needed only for commands outside that bounded policy.
+
 ## Long operation times out through a bridge
 
 Use the async/session API instead of one long synchronous MCP call:

@@ -218,6 +218,13 @@ SSH support can use the operating system's SSH agent and imported host profiles
 without reading private key material into normal MCP output. Permission policy
 is applied per configured host.
 
+SSH `PERMISSION_DENIED` results include structured diagnostics such as
+`host_profile`, `policy_mode`, `command`, a safely derived `path`,
+`blocking_rule`, and the runtime `config` path. SSH permissions inherit as
+`READ_ONLY ⊂ OPERATIONS ⊂ FULL`: a `FULL` host can use bounded `OPERATIONS`
+commands without expert mode. Expert mode is required only for commands outside
+that bounded policy; `FULL` does not otherwise grant unrestricted shell access.
+
 On Windows, WSL tools provide distribution discovery, path translation, and
 controlled command execution in installed distributions.
 
