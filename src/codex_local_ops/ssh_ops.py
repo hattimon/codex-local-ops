@@ -8,10 +8,9 @@ import socket
 from pathlib import Path
 from typing import Any
 
-from .config import load_config, save_config
+from .config import config_path, load_config, save_config
 from .processes import run
 from .safety import assert_trusted_path, expert_mode
-
 
 READ_ONLY_COMMANDS = {"hostname", "whoami", "uname", "systeminfo", "uptime", "id", "pwd", "df", "free", "ls", "cat", "docker ps", "docker logs", "systemctl status"}
 OPERATIONS_COMMANDS = READ_ONLY_COMMANDS | {
@@ -124,21 +123,72 @@ def _target_args(item: dict[str, Any]) -> list[str]:
     return args + [target]
 
 
-def _command_allowed(command: str, profile: str) -> bool:
+def _command_policy(command: str, profile: str) -> dict[str, Any]:
     profile = profile.upper()
     if profile == "FULL":
-        return expert_mode()
+        allowed = expert_mode()
+        return {"allowed": allowed, **({} if allowed else {"blocking_rule": "permissions.expert_mode", "blocking_validator": "expert_mode"})}
     if SHELL_META.search(command):
-        return False
-    normalized = " ".join(shlex.split(command, posix=True)).strip()
+        match = SHELL_META.search(command)
+        return {"allowed": False, "blocking_rule": "ssh.shell_meta", "blocking_validator": "SHELL_META", "rejected_token": match.group(0) if match else None}
+    try:
+        normalized = " ".join(shlex.split(command, posix=True)).strip()
+    except ValueError:
+        return {"allowed": False, "blocking_rule": f"ssh.{profile.lower()}_commands", "blocking_validator": "shlex.split"}
     if profile == "READ_ONLY":
-        return any(normalized == prefix or normalized.startswith(prefix + " ") for prefix in READ_ONLY_COMMANDS)
+        allowed = any(normalized == prefix or normalized.startswith(prefix + " ") for prefix in READ_ONLY_COMMANDS)
+        return {"allowed": allowed, **({} if allowed else {"blocking_rule": "ssh.read_only_commands", "blocking_validator": "READ_ONLY_COMMANDS"})}
     if profile == "OPERATIONS":
         if normalized.startswith("service "):
             parts = normalized.split()
-            return len(parts) == 3 and parts[2] in {"status", "start", "stop", "restart"}
-        return any(normalized == prefix or normalized.startswith(prefix + " ") for prefix in OPERATIONS_COMMANDS - {"service"})
-    return False
+            allowed = len(parts) == 3 and parts[2] in {"status", "start", "stop", "restart"}
+        else:
+            allowed = any(normalized == prefix or normalized.startswith(prefix + " ") for prefix in OPERATIONS_COMMANDS - {"service"})
+        return {"allowed": allowed, **({} if allowed else {"blocking_rule": "ssh.operations_commands", "blocking_validator": "OPERATIONS_COMMANDS"})}
+    return {"allowed": False, "blocking_rule": "ssh.permission_profile", "blocking_validator": "_command_policy"}
+
+
+def _command_allowed(command: str, profile: str) -> bool:
+    return bool(_command_policy(command, profile)["allowed"])
+
+
+def _safe_command_path(command: str) -> str | None:
+    if SHELL_META.search(command):
+        return None
+    try:
+        parts = shlex.split(command, posix=True)
+    except ValueError:
+        return None
+    if not parts:
+        return None
+    if parts[0] in {"cat", "stat"} and len(parts) == 2:
+        return parts[1]
+    if parts[0] == "test" and len(parts) == 2:
+        return parts[1]
+    if parts[0] == "test" and len(parts) == 3 and parts[1] in {"-e", "-f"}:
+        return parts[2]
+    return None
+
+
+def _ssh_denial(host: str, item: dict[str, Any], reason: str, rule: str, *, command: str | None = None, path: str | None = None, compatibility_host: bool = False, validator: str | None = None, rejected_token: str | None = None) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "status": "PERMISSION_DENIED", "reason": reason,
+        "host_profile": host,
+        "target": f"{item.get('user')}@{item.get('hostname')}" + (f":{item.get('port')}" if item.get("port", 22) != 22 else ""),
+        "policy_mode": str(item.get("permission_profile", "READ_ONLY")).upper(),
+        "blocking_rule": rule, "config": str(config_path()),
+    }
+    if compatibility_host:
+        result["host"] = host
+    if command is not None:
+        result["command"] = command
+    if path is not None:
+        result["path"] = path
+    if validator:
+        result["blocking_validator"] = validator
+    if rejected_token:
+        result["rejected_token"] = rejected_token
+    return result
 
 
 def test(host: str, timeout: int = 15) -> dict:
@@ -156,9 +206,10 @@ def exec_remote(host: str, command: str, timeout: int = 120) -> dict:
     item = host_info(host)
     profile = str(item.get("permission_profile", "READ_ONLY"))
     if not item.get("trusted", False):
-        return {"status": "PERMISSION_DENIED", "reason": "Host is not trusted", "host": host}
-    if not _command_allowed(command, profile):
-        return {"status": "PERMISSION_DENIED", "reason": f"Command is not allowed by SSH profile {profile}", "host": host}
+        return _ssh_denial(host, item, "Host is not trusted", "ssh.host.trusted", command=command, path=_safe_command_path(command), compatibility_host=True, validator="trusted")
+    policy = _command_policy(command, profile)
+    if not policy["allowed"]:
+        return _ssh_denial(host, item, f"Command is not allowed by SSH profile {profile}", policy["blocking_rule"], command=command, path=_safe_command_path(command), compatibility_host=True, validator=policy.get("blocking_validator"), rejected_token=policy.get("rejected_token"))
     exe = shutil.which("ssh")
     if not exe:
         return {"status": "CAPABILITY_UNAVAILABLE", "reason": "ssh executable not found"}
@@ -171,9 +222,9 @@ def transfer(host: str, local_path: str, remote_path: str, *, upload: bool) -> d
     item = host_info(host)
     profile = str(item.get("permission_profile", "READ_ONLY")).upper()
     if not item.get("trusted", False):
-        return {"status": "PERMISSION_DENIED", "reason": "Host is not trusted"}
+        return _ssh_denial(host, item, "Host is not trusted", "ssh.host.trusted", path=remote_path, validator="trusted")
     if upload and profile == "READ_ONLY":
-        return {"status": "PERMISSION_DENIED", "reason": "READ_ONLY host does not allow uploads"}
+        return _ssh_denial(host, item, "READ_ONLY host does not allow uploads", "ssh.transfer.read_only_upload", path=remote_path, validator="transfer")
     local = assert_trusted_path(local_path, must_exist=upload)
     exe = shutil.which("scp")
     if not exe:
