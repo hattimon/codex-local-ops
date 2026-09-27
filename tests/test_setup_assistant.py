@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
 from dataclasses import fields
 from pathlib import Path
 
 import pytest
 
-from codex_local_ops import setup_assistant
+from codex_local_ops import runtime_ops, setup_assistant
 from codex_local_ops.agents_config import AgentsConfigError, AgentsConfigInspection, update_managed_agents
 from codex_local_ops.codex_config import update_codex_mcp
 from codex_local_ops.runtime_ops import (
@@ -73,7 +75,7 @@ def _candidate(context, tmp_path: Path, *, transaction_id: str = "candidate-1") 
         runtime_path=str(runtime),
         wheel_path=str(wheel),
         wheel_name=wheel.name,
-        wheel_sha256="abc123",
+        wheel_sha256=hashlib.sha256(wheel.read_bytes()).hexdigest(),
         requested_features=(),
         expected_version="0.1.0b1",
         staged_at="2026-09-24T10:00:00Z",
@@ -406,7 +408,7 @@ def test_install_failure_after_activation_restores_runtime_and_configuration(tmp
     assert context.state_path.read_bytes() == state_original
 
 
-def test_explicit_rollback_restores_runtime_agents_and_trusted_roots(tmp_path: Path):
+def test_explicit_rollback_restores_runtime_agents_and_trusted_roots(tmp_path: Path, monkeypatch):
     context = _context(tmp_path)
     active = context.active_runtime_path
     _windows_python(active)
@@ -429,6 +431,20 @@ def test_explicit_rollback_restores_runtime_agents_and_trusted_roots(tmp_path: P
     context.local_config_path.write_bytes(local_original)
 
     candidate = _candidate(context, tmp_path, transaction_id="update-rollback")
+
+    def fake_run(args, **kwargs):
+        if args[1:4] == ["-m", "pip", "install"]:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if Path(args[0]).name.casefold() == "clops.exe":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if len(args) > 2 and args[1] == "-c":
+            active_runtime = Path(args[0]).parent.parent
+            package_file = active_runtime / "Lib" / "site-packages" / "codex_local_ops" / "__init__.py"
+            output = json.dumps({"version": "0.1.0b1", "file": str(package_file)}) + "\n"
+            return subprocess.CompletedProcess(args, 0, output, "")
+        raise AssertionError(f"Unexpected activation command: {args}")
+
+    monkeypatch.setattr(runtime_ops, "_run", fake_run)
     activation = activate_candidate(
         candidate,
         _pass_report(candidate),

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -41,7 +43,7 @@ def _candidate(tmp_path: Path, *, features=(), version="0.1.0b1") -> CandidateRu
         runtime_path=str(runtime),
         wheel_path=str(wheel),
         wheel_name=wheel.name,
-        wheel_sha256="abc123",
+        wheel_sha256=hashlib.sha256(wheel.read_bytes()).hexdigest(),
         requested_features=tuple(features),
         expected_version=version,
         staged_at="2026-09-24T10:00:00Z",
@@ -81,6 +83,25 @@ def test_feature_selection_is_deterministic_and_rejects_unknown():
         normalize_features(["gpu"])
 
 
+def test_wheel_requirement_without_features_is_local_file_uri(tmp_path):
+    wheel = tmp_path / "pkg.whl"
+    wheel.write_bytes(b"artifact")
+
+    assert runtime_ops._wheel_requirement(wheel) == wheel.resolve().as_uri()
+
+
+def test_wheel_requirement_with_features_is_pep508_direct_reference(tmp_path):
+    wheel = tmp_path / "pkg.whl"
+    wheel.write_bytes(b"artifact")
+
+    requirement = runtime_ops._wheel_requirement(
+        wheel,
+        ["windows", "browser", "desktop", "browser", "WINDOWS"],
+    )
+
+    assert requirement == f"codex-local-ops[desktop,browser,windows] @ {wheel.resolve().as_uri()}"
+
+
 def test_stage_candidate_uses_wheel_and_never_editable_install(tmp_path, monkeypatch):
     base = tmp_path / "base-python.exe"
     base.write_bytes(b"python")
@@ -101,14 +122,22 @@ def test_stage_candidate_uses_wheel_and_never_editable_install(tmp_path, monkeyp
         wheel_path=wheel,
         setup_dir=tmp_path / "setup",
         transaction_id="install-1",
-        features=["desktop", "obs"],
+        features=["windows", "browser", "desktop", "browser"],
+        install_browser_assets=False,
     )
 
     install = next(call for call in calls if "pip" in call)
     assert "-e" not in install
     assert "--editable" not in install
-    assert install[-1].startswith(wheel.resolve().as_uri())
-    assert install[-1].endswith("[desktop,obs]")
+    assert install == [
+        str(Path(candidate.runtime_path) / "Scripts" / "python.exe"),
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--no-input",
+        f"codex-local-ops[desktop,browser,windows] @ {wheel.resolve().as_uri()}",
+    ]
     assert Path(candidate.runtime_path).is_dir()
     assert candidate.wheel_sha256
 
@@ -292,20 +321,111 @@ def test_selected_browser_distinguishes_package_from_chromium(tmp_path, monkeypa
     assert report.status == "FAIL"
 
 
-def test_activation_requires_pass_and_preserves_previous_runtime(tmp_path):
-    candidate = _candidate(tmp_path)
+
+def _patch_activation_paths(monkeypatch):
+    def fake_python(runtime, *, platform_name=None):
+        return _windows_python(Path(runtime))
+
+    def fake_clops(runtime, *, platform_name=None):
+        path = Path(runtime) / "Scripts" / "clops.exe"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"launcher")
+        return path
+
+    monkeypatch.setattr(runtime_ops, "runtime_python", fake_python)
+    monkeypatch.setattr(runtime_ops, "runtime_clops", fake_clops)
+
+
+def _activation_sandbox(tmp_path: Path, *, version="0.1.0b1", features=()):
+    candidate = _candidate(tmp_path, features=features, version=version)
     _windows_python(Path(candidate.runtime_path))
     active = tmp_path / "home" / ".codex-local-ops-runtime.venv"
-    _windows_python(active)
-    (active / "old.txt").write_text("old", encoding="utf-8")
+    active_python = _windows_python(active)
+    sentinel = active / "known-good.txt"
+    sentinel.write_text("previous-runtime", encoding="utf-8")
     state_path = tmp_path / "setup" / "state.json"
-    save_setup_state(
-        SetupState(status="ACTIVE", active_runtime=RuntimeRecord(package_version="0.0.9", runtime_path=str(active))),
-        state_path,
+    previous = RuntimeRecord(
+        package_version="0.1.0b1",
+        runtime_path=str(active),
+        features=list(features),
     )
+    save_setup_state(SetupState(status="ACTIVE", active_runtime=previous), state_path)
     config = tmp_path / "home" / ".codex" / "config.toml"
-    _config(config, _windows_python(active))
+    _config(config, active_python)
+    return candidate, active, state_path, config, sentinel
 
+
+def _activate_for_test(candidate, active, state_path, config, tmp_path):
+    return activate_candidate(
+        candidate,
+        _pass_report(candidate),
+        setup_dir=tmp_path / "setup",
+        active_runtime_path=active,
+        codex_config_path=config,
+        codex_backup_root=tmp_path / "backups" / "config",
+        state_path=state_path,
+        state_backup_root=tmp_path / "backups" / "state",
+    )
+
+
+def _activation_runner(
+    calls,
+    *,
+    package_version="0.1.0b1",
+    refresh_returncode=0,
+    clops_returncode=0,
+    import_returncode=0,
+    import_file=None,
+):
+    def fake_run(args, **kwargs):
+        argv = list(args)
+        calls.append({"args": argv, "kwargs": kwargs})
+        if argv[1:4] == ["-m", "pip", "install"]:
+            if refresh_returncode == 0:
+                active = Path(argv[0]).parent.parent
+                package_file = active / "Lib" / "site-packages" / "codex_local_ops" / "__init__.py"
+                package_file.parent.mkdir(parents=True, exist_ok=True)
+                package_file.write_text("", encoding="utf-8")
+            return subprocess.CompletedProcess(
+                args,
+                refresh_returncode,
+                "",
+                "refresh failed" if refresh_returncode else "",
+            )
+        if Path(argv[0]).name.casefold() == "clops.exe":
+            return subprocess.CompletedProcess(
+                args,
+                clops_returncode,
+                "",
+                "launcher failed" if clops_returncode else "",
+            )
+        if len(argv) > 2 and argv[1] == "-c":
+            active = Path(argv[0]).parent.parent
+            package_file = import_file or (
+                active / "Lib" / "site-packages" / "codex_local_ops" / "__init__.py"
+            )
+            output = json.dumps({"version": package_version, "file": str(Path(package_file).resolve())}) + "\n"
+            return subprocess.CompletedProcess(
+                args,
+                import_returncode,
+                output if import_returncode == 0 else "",
+                "import failed" if import_returncode else "",
+            )
+        raise AssertionError(f"Unexpected activation command: {argv}")
+
+    return fake_run
+
+
+def _assert_activation_rolled_back(candidate, active, state_path, config, sentinel, original_state, original_config):
+    assert sentinel.read_text(encoding="utf-8") == "previous-runtime"
+    assert Path(candidate.runtime_path).is_dir()
+    assert state_path.read_bytes() == original_state
+    assert config.read_bytes() == original_config
+
+
+def test_activation_requires_pass_and_preserves_previous_runtime(tmp_path, monkeypatch):
+    _patch_activation_paths(monkeypatch)
+    candidate, active, state_path, config, sentinel = _activation_sandbox(tmp_path)
     fail = ValidationReport("FAIL", candidate.runtime_path, (ValidationCheck("x", "FAIL"),))
     with pytest.raises(RuntimeOperationError, match="CANDIDATE_NOT_VALIDATED"):
         activate_candidate(
@@ -318,89 +438,193 @@ def test_activation_requires_pass_and_preserves_previous_runtime(tmp_path):
             state_path=state_path,
             state_backup_root=tmp_path / "backups" / "state",
         )
-    assert (active / "old.txt").exists()
+    assert sentinel.is_file()
 
-    result = activate_candidate(
-        candidate,
-        _pass_report(candidate),
-        setup_dir=tmp_path / "setup",
-        active_runtime_path=active,
-        codex_config_path=config,
-        codex_backup_root=tmp_path / "backups" / "config",
-        state_path=state_path,
-        state_backup_root=tmp_path / "backups" / "state",
-    )
+    calls = []
+    monkeypatch.setattr(runtime_ops, "_run", _activation_runner(calls))
+    result = _activate_for_test(candidate, active, state_path, config, tmp_path)
     state = load_setup_state(state_path)
     assert result.previous_runtime is not None
     assert state.active_runtime is not None and state.active_runtime.package_version == "0.1.0b1"
     assert state.previous_runtime is not None
-    assert Path(state.previous_runtime.runtime_path or "") / "old.txt" == Path(state.previous_runtime.runtime_path or "") / "old.txt"
-    assert (Path(state.previous_runtime.runtime_path or "") / "old.txt").read_text(encoding="utf-8") == "old"
+    assert (Path(state.previous_runtime.runtime_path or "") / "known-good.txt").read_text(encoding="utf-8") == "previous-runtime"
     assert state.rollback.eligible is True
     assert Path(result.activation_record_path).is_file()
 
 
 def test_activation_failure_recovers_previous_runtime(tmp_path, monkeypatch):
-    candidate = _candidate(tmp_path)
-    _windows_python(Path(candidate.runtime_path))
-    active = tmp_path / "active"
-    _windows_python(active)
-    sentinel = active / "known-good.txt"
-    sentinel.write_text("safe", encoding="utf-8")
-    state_path = tmp_path / "setup" / "state.json"
-    save_setup_state(SetupState(status="ACTIVE", active_runtime=RuntimeRecord(runtime_path=str(active))), state_path)
-    config = tmp_path / "config.toml"
-    config.write_text("model = 'keep'\n", encoding="utf-8")
+    _patch_activation_paths(monkeypatch)
+    candidate, active, state_path, config, sentinel = _activation_sandbox(tmp_path)
+    original_state = state_path.read_bytes()
+    original_config = config.read_bytes()
 
     def fail_config(**kwargs):
         raise RuntimeError("config registration failed")
 
+    calls = []
+    monkeypatch.setattr(runtime_ops, "_run", _activation_runner(calls))
     monkeypatch.setattr(runtime_ops, "update_codex_mcp", fail_config)
     with pytest.raises(RuntimeOperationError, match="ACTIVATION_FAILED"):
-        activate_candidate(
-            candidate,
-            _pass_report(candidate),
-            setup_dir=tmp_path / "setup",
-            active_runtime_path=active,
-            codex_config_path=config,
-            codex_backup_root=tmp_path / "backups" / "config",
-            state_path=state_path,
-            state_backup_root=tmp_path / "backups" / "state",
-        )
-    assert sentinel.read_text(encoding="utf-8") == "safe"
-    assert Path(candidate.runtime_path).exists()
+        _activate_for_test(candidate, active, state_path, config, tmp_path)
+    _assert_activation_rolled_back(candidate, active, state_path, config, sentinel, original_state, original_config)
+    assert len(calls) == 3
 
 
-def test_rollback_restores_previous_runtime_config_and_state(tmp_path):
-    candidate = _candidate(tmp_path)
-    _windows_python(Path(candidate.runtime_path))
-    active = tmp_path / "home" / ".codex-local-ops-runtime.venv"
-    _windows_python(active)
-    (active / "old.txt").write_text("old", encoding="utf-8")
-    state_path = tmp_path / "setup" / "state.json"
-    original_state = SetupState(status="ACTIVE", active_runtime=RuntimeRecord(package_version="0.0.9", runtime_path=str(active)))
-    save_setup_state(original_state, state_path)
-    config = tmp_path / "home" / ".codex" / "config.toml"
-    old_python = tmp_path / "legacy" / "python.exe"
-    _config(config, old_python)
+def test_activation_artifact_hash_mismatch_rolls_back_runtime_and_state(tmp_path, monkeypatch):
+    _patch_activation_paths(monkeypatch)
+    candidate, active, state_path, config, sentinel = _activation_sandbox(tmp_path)
+    original_state = state_path.read_bytes()
+    original_config = config.read_bytes()
+    candidate = replace(candidate, wheel_sha256="0" * 64)
+    calls = []
+    monkeypatch.setattr(runtime_ops, "_run", _activation_runner(calls))
 
-    result = activate_candidate(
-        candidate,
-        _pass_report(candidate),
-        setup_dir=tmp_path / "setup",
-        active_runtime_path=active,
-        codex_config_path=config,
-        codex_backup_root=tmp_path / "backups" / "config",
-        state_path=state_path,
-        state_backup_root=tmp_path / "backups" / "state",
+    with pytest.raises(RuntimeOperationError, match="ARTIFACT_HASH_MISMATCH") as error:
+        _activate_for_test(candidate, active, state_path, config, tmp_path)
+
+    assert error.value.code == "ARTIFACT_HASH_MISMATCH"
+    _assert_activation_rolled_back(candidate, active, state_path, config, sentinel, original_state, original_config)
+    assert calls == []
+    record = json.loads(Path(runtime_ops.activation_record_path(tmp_path / "setup", candidate.transaction_id)).read_text())
+    assert record["phase"] == "ROLLED_BACK"
+
+
+def test_activation_refresh_failure_rolls_back_runtime_and_state(tmp_path, monkeypatch):
+    _patch_activation_paths(monkeypatch)
+    candidate, active, state_path, config, sentinel = _activation_sandbox(tmp_path, version="0.1.0b2")
+    original_state = state_path.read_bytes()
+    original_config = config.read_bytes()
+    calls = []
+    monkeypatch.setattr(
+        runtime_ops,
+        "_run",
+        _activation_runner(calls, package_version="0.1.0b2", refresh_returncode=1),
     )
+
+    with pytest.raises(RuntimeOperationError, match="PACKAGE_REFRESH_FAILED") as error:
+        _activate_for_test(candidate, active, state_path, config, tmp_path)
+
+    assert error.value.code == "PACKAGE_REFRESH_FAILED"
+    _assert_activation_rolled_back(candidate, active, state_path, config, sentinel, original_state, original_config)
+    assert len(calls) == 1
+    assert calls[0]["args"][1:4] == ["-m", "pip", "install"]
+
+
+def test_activation_post_move_clops_failure_rolls_back_runtime_and_state(tmp_path, monkeypatch):
+    _patch_activation_paths(monkeypatch)
+    candidate, active, state_path, config, sentinel = _activation_sandbox(tmp_path, version="0.1.0b2")
+    original_state = state_path.read_bytes()
+    original_config = config.read_bytes()
+    calls = []
+    monkeypatch.setattr(
+        runtime_ops,
+        "_run",
+        _activation_runner(calls, package_version="0.1.0b2", clops_returncode=1),
+    )
+
+    with pytest.raises(RuntimeOperationError, match="ACTIVE_CLOPS_HELP_FAILED") as error:
+        _activate_for_test(candidate, active, state_path, config, tmp_path)
+
+    assert error.value.code == "ACTIVE_CLOPS_HELP_FAILED"
+    _assert_activation_rolled_back(candidate, active, state_path, config, sentinel, original_state, original_config)
+    assert len(calls) == 2
+    assert Path(calls[1]["args"][0]).name == "clops.exe"
+
+
+def test_activation_post_move_import_failure_rolls_back_runtime_and_state(tmp_path, monkeypatch):
+    _patch_activation_paths(monkeypatch)
+    candidate, active, state_path, config, sentinel = _activation_sandbox(tmp_path, version="0.1.0b2")
+    original_state = state_path.read_bytes()
+    original_config = config.read_bytes()
+    calls = []
+    monkeypatch.setattr(
+        runtime_ops,
+        "_run",
+        _activation_runner(calls, package_version="0.1.0b2", import_returncode=1),
+    )
+
+    with pytest.raises(RuntimeOperationError, match="ACTIVE_PACKAGE_IMPORT_FAILED"):
+        _activate_for_test(candidate, active, state_path, config, tmp_path)
+
+    _assert_activation_rolled_back(candidate, active, state_path, config, sentinel, original_state, original_config)
+    assert len(calls) == 3
+    assert calls[2]["args"][1] == "-c"
+
+
+def test_activation_rejects_import_outside_active_runtime(tmp_path, monkeypatch):
+    _patch_activation_paths(monkeypatch)
+    candidate, active, state_path, config, sentinel = _activation_sandbox(tmp_path, version="0.1.0b2")
+    original_state = state_path.read_bytes()
+    original_config = config.read_bytes()
+    outside_file = tmp_path / "source" / "codex_local_ops" / "__init__.py"
+    calls = []
+    monkeypatch.setattr(
+        runtime_ops,
+        "_run",
+        _activation_runner(calls, package_version="0.1.0b2", import_file=outside_file),
+    )
+
+    with pytest.raises(RuntimeOperationError, match="ACTIVE_PACKAGE_IMPORT_OUTSIDE_RUNTIME"):
+        _activate_for_test(candidate, active, state_path, config, tmp_path)
+
+    _assert_activation_rolled_back(candidate, active, state_path, config, sentinel, original_state, original_config)
+    assert len(calls) == 3
+
+
+def test_activation_refreshes_entrypoints_before_config_and_preserves_previous_runtime(tmp_path, monkeypatch):
+    _patch_activation_paths(monkeypatch)
+    features = ("desktop", "browser", "windows")
+    candidate, active, state_path, config, _sentinel = _activation_sandbox(
+        tmp_path,
+        version="0.1.0b2",
+        features=features,
+    )
+    calls = []
+    monkeypatch.setattr(runtime_ops, "_run", _activation_runner(calls, package_version="0.1.0b2"))
+
+    result = _activate_for_test(candidate, active, state_path, config, tmp_path)
+    state = load_setup_state(state_path)
+    refresh_args = calls[0]["args"]
+    assert refresh_args == [
+        str(active / "Scripts" / "python.exe"),
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--no-input",
+        "--force-reinstall",
+        "--no-deps",
+        str(Path(candidate.wheel_path).resolve()),
+    ]
+    assert Path(calls[1]["args"][0]) == active / "Scripts" / "clops.exe"
+    assert calls[1]["args"][1:] == ["--help"]
+    assert Path(calls[2]["args"][0]) == active / "Scripts" / "python.exe"
+    assert calls[2]["args"][1] == "-c"
+    assert calls[0]["kwargs"]["env"]["CODEX_LOCAL_OPS_HOME"] == str(
+        Path(candidate.candidate_root) / "validation-home"
+    )
+    assert result.active_runtime.package_version == "0.1.0b2"
+    assert result.active_runtime.features == list(features)
+    assert result.previous_runtime is not None
+    assert (Path(result.previous_runtime.runtime_path) / "known-good.txt").read_text(encoding="utf-8") == "previous-runtime"
+    assert state.active_runtime is not None and state.active_runtime.package_version == "0.1.0b2"
+    assert state.previous_runtime is not None and state.rollback.eligible is True
+    assert json.loads(Path(result.activation_record_path).read_text())["phase"] == "COMMITTED"
+
+
+def test_rollback_restores_previous_runtime_config_and_state(tmp_path, monkeypatch):
+    _patch_activation_paths(monkeypatch)
+    candidate, active, state_path, config, sentinel = _activation_sandbox(tmp_path)
+    calls = []
+    monkeypatch.setattr(runtime_ops, "_run", _activation_runner(calls))
+    result = _activate_for_test(candidate, active, state_path, config, tmp_path)
     restored = rollback_activation(Path(result.activation_record_path), state_path=state_path)
     document = tomlkit.parse(config.read_text(encoding="utf-8"))
-    assert (active / "old.txt").read_text(encoding="utf-8") == "old"
-    assert document["mcp_servers"]["codexLocalOps"]["command"] == str(old_python)
-    assert restored.package_version == "0.0.9"
-    assert load_setup_state(state_path).active_runtime.package_version == "0.0.9"
-
+    assert sentinel.read_text(encoding="utf-8") == "previous-runtime"
+    assert document["mcp_servers"]["codexLocalOps"]["command"] == str(active / "Scripts" / "python.exe")
+    assert restored.package_version == "0.1.0b1"
+    assert load_setup_state(state_path).active_runtime.package_version == "0.1.0b1"
+    assert len(calls) == 3
 
 def test_interrupted_update_detection(tmp_path):
     tx = tmp_path / "setup" / "transactions" / "update-1"

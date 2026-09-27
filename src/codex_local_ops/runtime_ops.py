@@ -131,6 +131,17 @@ def normalize_features(features: list[str] | tuple[str, ...] | set[str] | None) 
     return tuple(name for name in FEATURES if name in requested)
 
 
+def _wheel_requirement(
+    wheel_path: Path,
+    features: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> str:
+    wheel_uri = Path(wheel_path).resolve().as_uri()
+    selected = normalize_features(features)
+    if not selected:
+        return wheel_uri
+    return f"codex-local-ops[{','.join(selected)}] @ {wheel_uri}"
+
+
 def runtime_python(runtime_path: Path, *, platform_name: str | None = None) -> Path:
     name = (platform_name or os.name).lower()
     if name in {"nt", "windows", "win32"}:
@@ -249,9 +260,7 @@ def stage_candidate_runtime(
     if not candidate_python.is_file():
         raise RuntimeOperationError("CANDIDATE_PYTHON_MISSING", "STAGE", str(candidate_python))
 
-    requirement = wheel_path.resolve().as_uri()
-    if selected:
-        requirement = f"{requirement}[{','.join(selected)}]"
+    requirement = _wheel_requirement(wheel_path, selected)
     installed = _run(
         [
             str(candidate_python),
@@ -565,6 +574,100 @@ def activate_candidate(
         moved_candidate = True
         _journal(record_path, journal, "RUNTIME_ACTIVATED")
 
+        wheel_path = Path(candidate.wheel_path)
+        try:
+            if not wheel_path.is_file():
+                raise RuntimeOperationError(
+                    "ARTIFACT_HASH_MISMATCH",
+                    "ACTIVATE",
+                    f"Candidate wheel is missing: {wheel_path}",
+                )
+            actual_wheel_sha256 = _sha256(wheel_path)
+        except OSError as hash_error:
+            raise RuntimeOperationError(
+                "ARTIFACT_HASH_MISMATCH",
+                "ACTIVATE",
+                f"Could not verify candidate wheel {wheel_path}: {hash_error}",
+            ) from hash_error
+        if actual_wheel_sha256.lower() != candidate.wheel_sha256.lower():
+            raise RuntimeOperationError(
+                "ARTIFACT_HASH_MISMATCH",
+                "ACTIVATE",
+                f"Expected {candidate.wheel_sha256}, got {actual_wheel_sha256}",
+            )
+        _journal(record_path, journal, "ARTIFACT_VERIFIED")
+
+        active_python = runtime_python(active)
+        validation_env = _validation_env(candidate_runtime)
+        validation_cwd = Path(candidate.candidate_root)
+        refresh = _run(
+            [
+                str(active_python),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "--no-input",
+                "--force-reinstall",
+                "--no-deps",
+                str(wheel_path.resolve()),
+            ],
+            cwd=validation_cwd,
+            env=validation_env,
+            timeout=600,
+        )
+        if refresh.returncode != 0:
+            raise _command_failure("PACKAGE_REFRESH_FAILED", "ACTIVATE", refresh)
+
+        clops = runtime_clops(active)
+        clops_check = _run(
+            [str(clops), "--help"],
+            cwd=validation_cwd,
+            env=validation_env,
+        )
+        if clops_check.returncode != 0:
+            raise _command_failure("ACTIVE_CLOPS_HELP_FAILED", "ACTIVATE", clops_check)
+
+        import_script = (
+            "import json,pathlib; import codex_local_ops; "
+            "from importlib.metadata import version; "
+            "print(json.dumps({'version':version('codex-local-ops'),"
+            "'file':str(pathlib.Path(codex_local_ops.__file__).resolve())}))"
+        )
+        import_check = _run(
+            [str(active_python), "-c", import_script],
+            cwd=validation_cwd,
+            env=validation_env,
+        )
+        if import_check.returncode != 0:
+            raise _command_failure("ACTIVE_PACKAGE_IMPORT_FAILED", "ACTIVATE", import_check)
+        try:
+            package_data = json.loads(import_check.stdout.strip().splitlines()[-1])
+            active_package_version = str(package_data["version"])
+            package_file = Path(str(package_data["file"])).resolve()
+        except (IndexError, KeyError, TypeError, json.JSONDecodeError) as import_error:
+            raise RuntimeOperationError(
+                "ACTIVE_PACKAGE_IMPORT_INVALID",
+                "ACTIVATE",
+                str(import_error),
+            ) from import_error
+        try:
+            package_file.relative_to(active.resolve())
+        except ValueError as import_error:
+            raise RuntimeOperationError(
+                "ACTIVE_PACKAGE_IMPORT_OUTSIDE_RUNTIME",
+                "ACTIVATE",
+                str(package_file),
+            ) from import_error
+        expected_version = candidate.expected_version or validation.package_version
+        if expected_version is not None and active_package_version != expected_version:
+            raise RuntimeOperationError(
+                "ACTIVE_PACKAGE_VERSION_MISMATCH",
+                "ACTIVATE",
+                f"Expected {expected_version}, got {active_package_version}",
+            )
+        _journal(record_path, journal, "ACTIVE_RUNTIME_VALIDATED")
+
         config_result = update_codex_mcp(
             path=codex_config_path,
             runtime_python=runtime_python(active),
@@ -636,7 +739,12 @@ def activate_candidate(
         journal["failure"] = str(sanitize(str(exc)))
         journal["rollback_errors"] = [str(sanitize(item)) for item in rollback_errors]
         _journal(record_path, journal, "RECOVERY_REQUIRED" if rollback_errors else "ROLLED_BACK")
-        code = "ACTIVATION_RECOVERY_REQUIRED" if rollback_errors else "ACTIVATION_FAILED"
+        if rollback_errors:
+            code = "ACTIVATION_RECOVERY_REQUIRED"
+        elif isinstance(exc, RuntimeOperationError):
+            code = exc.code
+        else:
+            code = "ACTIVATION_FAILED"
         raise RuntimeOperationError(code, "ACTIVATE", str(exc)) from exc
 
 

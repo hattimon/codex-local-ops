@@ -57,6 +57,18 @@ CODEX_TO_CODEXLOCALOPS
 WINDOWS_HOST_VISIBLE_THROUGH_LOCALOPS
 ```
 
+## Stable runtime activation
+
+Setup Assistant validates a candidate before activation and keeps the previous
+runtime for rollback. After moving the candidate to its final path, activation
+verifies the staged wheel hash and reinstalls that exact wheel with the active
+Python interpreter and the no-deps option. This regenerates Windows console
+launchers with the final interpreter path without changing the candidate's
+selected optional features. Before changing Codex MCP registration or committing
+setup state, activation checks clops --help and confirms the package imports
+from the active runtime. A failed post-move check restores the previous runtime
+and setup state.
+
 ## Managed AGENTS.md policy
 
 The managed block preserves all user text outside its markers. Version 2 adds
