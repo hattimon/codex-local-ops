@@ -8,6 +8,7 @@ Git tag `v0.1.0-beta.1` corresponds to package version `0.1.0b1`.
 
 ## 0.1.0-beta.1 - Unreleased
 
+- Structured SSH `PERMISSION_DENIED` diagnostics identify the host profile, policy rule, and safe command context; `FULL` inherits bounded `OPERATIONS` commands without expert mode.
 - Initial public prerelease preparation.
 - Windows is the primary supported and interactively validated platform.
 - Linux and macOS platform backends are implemented with native validation still in progress.

@@ -224,8 +224,10 @@ uprawnień jest stosowana osobno dla każdego skonfigurowanego hosta.
 Wyniki SSH `PERMISSION_DENIED` zawierają uporządkowaną diagnostykę, np.
 `host_profile`, `policy_mode`, `command`, bezpiecznie ustaloną ścieżkę `path`,
 `blocking_rule` i ścieżkę konfiguracji `config`. `FULL` nie oznacza
-nieograniczonej powłoki: obecnie nadal wymaga włączenia polityki expert mode
-Local Ops.
+nieograniczonej powłoki. Uprawnienia SSH dziedziczą się jako
+`READ_ONLY ⊂ OPERATIONS ⊂ FULL`: host `FULL` może wykonywać ograniczone komendy
+`OPERATIONS` bez expert mode. Expert mode jest wymagany tylko dla komend poza
+tym ograniczonym zestawem.
 
 Na Windows narzędzia WSL zapewniają wykrywanie dystrybucji, translację ścieżek
 i kontrolowane wykonanie komend w zainstalowanych dystrybucjach.

@@ -52,8 +52,9 @@ Typical examples:
 SSH `PERMISSION_DENIED` results include structured fields such as `host_profile`,
 `policy_mode`, `command`, a safely derived `path`, `blocking_rule`, and the
 runtime `config` path. Use `blocking_rule` to identify the policy that rejected
-the request. SSH `FULL` does not grant unrestricted shell access and currently
-still requires Local Ops expert mode.
+the request. SSH permissions inherit as `READ_ONLY ⊂ OPERATIONS ⊂ FULL`. A
+`FULL` host can use bounded `OPERATIONS` commands without expert mode; expert
+mode is needed only for commands outside that bounded policy.
 
 ## Long operation times out through a bridge
 

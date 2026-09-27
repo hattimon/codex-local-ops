@@ -123,18 +123,16 @@ def _target_args(item: dict[str, Any]) -> list[str]:
     return args + [target]
 
 
-def _command_policy(command: str, profile: str) -> dict[str, Any]:
+def _bounded_command_policy(command: str, profile: str) -> dict[str, Any]:
+    """Evaluate the existing READ_ONLY or OPERATIONS command boundary."""
     profile = profile.upper()
-    if profile == "FULL":
-        allowed = expert_mode()
-        return {"allowed": allowed, **({} if allowed else {"blocking_rule": "permissions.expert_mode", "blocking_validator": "expert_mode"})}
     if SHELL_META.search(command):
         match = SHELL_META.search(command)
         return {"allowed": False, "blocking_rule": "ssh.shell_meta", "blocking_validator": "SHELL_META", "rejected_token": match.group(0) if match else None}
     try:
         normalized = " ".join(shlex.split(command, posix=True)).strip()
     except ValueError:
-        return {"allowed": False, "blocking_rule": f"ssh.{profile.lower()}_commands", "blocking_validator": "shlex.split"}
+        return {"allowed": False, "blocking_rule": "ssh.command_parse", "blocking_validator": "shlex.split"}
     if profile == "READ_ONLY":
         allowed = any(normalized == prefix or normalized.startswith(prefix + " ") for prefix in READ_ONLY_COMMANDS)
         return {"allowed": allowed, **({} if allowed else {"blocking_rule": "ssh.read_only_commands", "blocking_validator": "READ_ONLY_COMMANDS"})}
@@ -145,6 +143,23 @@ def _command_policy(command: str, profile: str) -> dict[str, Any]:
         else:
             allowed = any(normalized == prefix or normalized.startswith(prefix + " ") for prefix in OPERATIONS_COMMANDS - {"service"})
         return {"allowed": allowed, **({} if allowed else {"blocking_rule": "ssh.operations_commands", "blocking_validator": "OPERATIONS_COMMANDS"})}
+    return {"allowed": False, "blocking_rule": "ssh.permission_profile", "blocking_validator": "_bounded_command_policy"}
+
+
+def _command_policy(command: str, profile: str) -> dict[str, Any]:
+    profile = profile.upper()
+    if profile in {"READ_ONLY", "OPERATIONS"}:
+        return _bounded_command_policy(command, profile)
+    if profile == "FULL":
+        # Preserve the existing broad expert-mode behavior, including shell syntax.
+        if expert_mode():
+            return {"allowed": True}
+        bounded = _bounded_command_policy(command, "OPERATIONS")
+        if bounded["allowed"]:
+            return bounded
+        if bounded["blocking_rule"] in {"ssh.shell_meta", "ssh.command_parse"}:
+            return bounded
+        return {"allowed": False, "blocking_rule": "permissions.expert_mode", "blocking_validator": "expert_mode"}
     return {"allowed": False, "blocking_rule": "ssh.permission_profile", "blocking_validator": "_command_policy"}
 
 
@@ -171,13 +186,19 @@ def _safe_command_path(command: str) -> str | None:
 
 
 def _ssh_denial(host: str, item: dict[str, Any], reason: str, rule: str, *, command: str | None = None, path: str | None = None, compatibility_host: bool = False, validator: str | None = None, rejected_token: str | None = None) -> dict[str, Any]:
+    user = str(item.get("user") or "").strip()
+    hostname = str(item.get("hostname") or "").strip()
+    target = f"{user}@{hostname}" if user and hostname else hostname or None
+    if target is not None and item.get("port", 22) != 22:
+        target = f"{target}:{item['port']}"
     result: dict[str, Any] = {
         "status": "PERMISSION_DENIED", "reason": reason,
         "host_profile": host,
-        "target": f"{item.get('user')}@{item.get('hostname')}" + (f":{item.get('port')}" if item.get("port", 22) != 22 else ""),
         "policy_mode": str(item.get("permission_profile", "READ_ONLY")).upper(),
         "blocking_rule": rule, "config": str(config_path()),
     }
+    if target is not None:
+        result["target"] = target
     if compatibility_host:
         result["host"] = host
     if command is not None:
