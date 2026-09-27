@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codex-local-ops"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Cross-platform local operations MCP server for Codex"
 readme = "README.md"
 requires-python = ">=3.11"
